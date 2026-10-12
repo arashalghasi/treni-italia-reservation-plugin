@@ -43,8 +43,12 @@ or the path in the environment variable `TRENITALIA_COMMUTE_CONFIG`. The same fo
 profile, run logs and recordings. Nothing personal lives in the skill folder, so the skill folder can be shared
 as it is.
 
-If the file is missing: copy `config.example.json` from this folder to that path, ask the user for every
-`CHANGE-ME` value, then write the file and show the user its path.
+If the file is missing on Windows: run `scripts/setup.ps1` in a local interactive PowerShell terminal.
+It asks the user for the traveller, card, stations, both train services and time windows, free offer names/IDs,
+seat preferences, and the Le Frecce username and password. The password prompt is hidden and saves a
+Windows-encrypted credential; never ask the user to type a password in chat. Verify the account with `login`
+and `status` after setup. Outside Windows, copy `config.example.json` and ask for its required values, then
+use the environment credential described in `README.md`.
 
 | Field | Meaning |
 |---|---|
@@ -53,7 +57,7 @@ If the file is missing: copy `config.example.json` from this folder to that path
 | `stations.<key>` | exact station names as the site lists them |
 | `legs[]` | one entry per direction: `id`, `from`, `to` (station keys), `service` (train acronym: `IC`, `FB`, `FR`…), `departAfter`/`departBefore` (`HH:mm` window), `offerName` and `offerId` (the free fare) |
 | `seats` | preferred carriages, seat rules in priority order, `knownGood` seats per train |
-| `window` | `workingDays` (default 20), `weekdays` (1 = Monday … 5 = Friday), `extraHolidays` (`YYYY-MM-DD` or yearly `MM-DD`, for example a patron saint), `minutesBeforeDeparture` |
+| `window` | `workingDays` (default 20), `weekdays` (0 = Sunday … 6 = Saturday; default 1–5), `extraHolidays` (`YYYY-MM-DD` or yearly `MM-DD`, for example a patron saint), `minutesBeforeDeparture` |
 
 Each direction is its own reservation with its own PNR, so a day can be half-booked.
 
@@ -91,7 +95,7 @@ Chrome on the script's own profile and signs in from the saved credential; the s
 Then run `status` again.
 
 - `login` finds no saved credential: ask the user once to run `scripts/save-credential.ps1` (they type username
-  and password into its prompt; Windows encrypts the file for their user only), then run `login` again.
+  and password into its hidden local prompt; Windows encrypts the file for their user only), then run `login` again.
 - Credential rejected, CAPTCHA, OTP or any other challenge: stop and report the exact message. Do not retry in a
   loop; the user can sign in by hand in the window `login` opens (it waits 5 minutes).
 
@@ -115,11 +119,15 @@ in `evidence`.
 1. **Do not ask which days.** The days come from the account: `book` takes the next days whose legs are all
    `to-book`, in order. A request to book ("book my commute", "reserve two days") is the user's authorisation
    for those days, including the conditions of carriage; a number in the request is `--count`, otherwise book
-   every such day in the window. So run `--confirm` directly.
+   every such day in the window. Use `--until=YYYY-MM-DD` when the request has an end date, so no later day
+   can enter the booking loop. So run `--confirm` directly.
 2. Use the dry run (no `--confirm`) only when the user asks to see or test without booking.
 3. Report `booked[]`: day, trains, seats, `pnr`, `verifiedLegs`.
 
-Half-booked days (only one leg free) are skipped by `book`; book their missing leg with §4.
+Half-booked days (only one leg free) are skipped by the normal `book` run. When the user wants the remaining
+leg alone, use `book --on=YYYY-MM-DD --leg=<leg id> --count=1 --confirm`; it restricts the account check,
+search, cart and confirmation to that one date and leg. The same command handles a date when only one of the
+configured train services runs. Do not book the other leg or substitute another service without authorisation.
 A dry-run cart keeps its seats until it expires (about 10 minutes): a real run right after it sees those seats as
 taken and picks others. The trip list shows a new booking only after some
 seconds; `book` waits up to 90 s for it.

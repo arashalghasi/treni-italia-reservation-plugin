@@ -2,7 +2,7 @@
 //
 //   node commute.mjs status [--days=20] [--from=YYYY-MM-DD] [--visible] [--debug]
 //       Read-only plan: session, legs already booked, matching train per workday, legs still to book.
-//   node commute.mjs book [--count=N] [--confirm] [--headless]
+//   node commute.mjs book [--count=N] [--until=YYYY-MM-DD] [--on=YYYY-MM-DD --leg=ID] [--confirm] [--headless]
 //       Books the days the account still misses (every leg to book), in order, at €0,00 only; all of them in the
 //       window unless --count limits the number.
 //       Without --confirm it stops on the payment page; --confirm accepts the conditions of carriage.
@@ -391,15 +391,16 @@ async function searchDay(page, config, day) {
   await page.waitForTimeout(2500);
   await chooseStation(page, 'input#origin-station', config.stations[outbound.from]);
   await chooseStation(page, 'input#destination-station', config.stations[outbound.to]);
-  if (!(await page.locator('input#returnDate-end-dt-input:visible').count())) {
+  if (back && !(await page.locator('input#returnDate-end-dt-input:visible').count())) {
     await page.getByRole('button', { name: /Aggiungi un ritorno|RETURN JOURNEY|RITORNO/i }).first().click();
     await page.waitForTimeout(800);
   }
   // --- adding the return sometimes clears the destination
   await chooseStation(page, 'input#destination-station', config.stations[outbound.to]);
   const [year, month, date] = day.split('-').map(Number);
-  const fieldDate = (await page.locator('input#departureDate-dt-input').first().inputValue()).split('/').map(Number);
-  await page.locator('input#departureDate-dt-input').click();
+  const departureDate = page.locator('input#departureDate-dt-input, input#_departureDate-dt-input').first();
+  const fieldDate = (await departureDate.inputValue()).split('/').map(Number);
+  await departureDate.click();
   await page.waitForTimeout(800);
   // --- two months are shown: find the grid titled with the target month; otherwise count from the month of the
   //     date in the field, which the calendar shows first
@@ -428,11 +429,11 @@ async function searchDay(page, config, day) {
   // --- floor below the window, rounded down to the quarter hour of the time list
   const floor = (leg) => clock(Math.floor((minutes(leg.departAfter) - 10) / 15) * 15);
   await setTime('input#departureTime-dt-input', floor(outbound));
-  await setTime('input#returnTime-dt-input', floor(back));
+  if (back) await setTime('input#returnTime-dt-input', floor(back));
   const read = (id) => page.locator(`input#${id}`).first().inputValue();
   const expected = italianDay(day);
-  const form = { from: await read('origin-station'), to: await read('destination-station'), outboundDate: await read('departureDate-dt-input'), returnDate: await read('returnDate-end-dt-input') };
-  if (form.from !== config.stations[outbound.from] || form.to !== config.stations[outbound.to] || form.outboundDate !== expected || form.returnDate !== expected) {
+  const form = { from: await read('origin-station'), to: await read('destination-station'), outboundDate: await departureDate.inputValue(), returnDate: back ? await read('returnDate-end-dt-input') : null };
+  if (form.from !== config.stations[outbound.from] || form.to !== config.stations[outbound.to] || form.outboundDate !== expected || (back && form.returnDate !== expected)) {
     fail('book', `search form not as expected: ${JSON.stringify(form)}`);
   }
   await page.getByRole('button', { name: /^\s*(SEARCH|CERCA)\s*$/i }).first().click();
@@ -574,9 +575,19 @@ async function pickSeat(page, config, leg, row) {
   }, choice);
   const element = handle.asElement();
   await element.scrollIntoViewIfNeeded();
-  await (await element.evaluateHandle((node) => node.closest('button, a, [role=button], [tabindex]') || node.parentElement)).asElement().click();
+  const clickTarget = (await element.evaluateHandle((node) => node.closest('button, a, [role=button], [tabindex]') || node.parentElement)).asElement();
+  let clickError;
+  try { await clickTarget.click({ timeout: 10000 }); } catch (error) { clickError = error; }
+  // The seat map sometimes scrolls under the sticky footer while Playwright waits for an unobstructed click.
+  // Dispatch the same seat's click directly only after checking that the first click did not select it.
+  if (clickError && !/selezionat/i.test((await element.getAttribute('aria-label')) || '')) {
+    await element.evaluate((node) => node.click());
+  }
   await page.waitForTimeout(1500);
-  if (!/selezionat/i.test((await element.getAttribute('aria-label')) || '')) fail('book', `${leg.id}: seat ${choice.coach}-${choice.seat} did not get selected`);
+  if (!/selezionat/i.test((await element.getAttribute('aria-label')) || '')) {
+    if (clickError) throw clickError;
+    fail('book', `${leg.id}: seat ${choice.coach}-${choice.seat} did not get selected`);
+  }
   // --- picture of the choice for the run report; a window in the background may not render it (5 s at most)
   fs.mkdirSync(runsDirectory, { recursive: true });
   const picture = path.join(runsDirectory, `${stamp()}_${row.day}_${leg.id}-seat-${choice.coach}-${choice.seat}.jpg`);
@@ -602,25 +613,30 @@ async function prepareDay(page, api, config, day, rows) {
   const [outbound, back] = config.legs;
   const rowOf = (leg) => rows.find((row) => row.day === day && row.leg === leg.id);
   await chooseFreeFare(page, config, outbound, rowOf(outbound));
-  await page.getByText(/^\s*(GO TO RETURN JOURNEY|VAI AL RITORNO)\s*$/i).first().click();
-  await page.waitForTimeout(5000);
-  const refusal = await page.evaluate(() => (document.body.innerText.match(/[^\n]*(not possible to perform|Non è possibile effettuare)[^\n]*/i) || [null])[0]);
-  if (refusal) fail('book', `refused at "go to return": ${refusal.trim()} (see SKILL.md §6, entitlement)`);
-  await chooseFreeFare(page, config, back, rowOf(back));
+  if (back) {
+    await page.getByText(/^\s*(GO TO RETURN JOURNEY|VAI AL RITORNO)\s*$/i).first().click();
+    await page.waitForTimeout(5000);
+    const refusal = await page.evaluate(() => (document.body.innerText.match(/[^\n]*(not possible to perform|Non è possibile effettuare)[^\n]*/i) || [null])[0]);
+    if (refusal) fail('book', `refused at "go to return": ${refusal.trim()} (see SKILL.md §6, entitlement)`);
+    await chooseFreeFare(page, config, back, rowOf(back));
+  }
   await page.getByRole('button', { name: /^\s*(PURCHASE|ACQUISTA)\s*$/i }).first().click();
   await page.waitForURL(/seatmap/);
   await page.waitForTimeout(4000);
   const outboundSeat = await pickSeat(page, config, outbound, rowOf(outbound));
-  await page.getByRole('button', { name: /^\s*(NEXT TRAIN|PROSSIMO TRENO)\s*$/i }).first().click();
-  await page.waitForTimeout(4000);
-  const returnSeat = await pickSeat(page, config, back, rowOf(back));
+  let returnSeat;
+  if (back) {
+    await page.getByRole('button', { name: /^\s*(NEXT TRAIN|PROSSIMO TRENO)\s*$/i }).first().click();
+    await page.waitForTimeout(4000);
+    returnSeat = await pickSeat(page, config, back, rowOf(back));
+  }
   await page.getByRole('button', { name: /^\s*(CONFIRM|CONFERMA)\s*$/i }).first().click();
   await page.waitForURL(/travellers/);
   await page.waitForTimeout(3000);
   await expectFree(page, 'details and payment page');
   const cart = await cartSummary(page, api);
   for (const leg of config.legs) if (!cart.offers.includes(leg.offerName)) fail('book', `cart does not hold ${leg.offerName}: ${cart.offers.join(', ')}`);
-  return { day, trains: [rowOf(outbound), rowOf(back)].map((row) => `${row.train} ${row.departure}`), seats: { [outbound.id]: `${outboundSeat.coach}-${outboundSeat.seat} (${outboundSeat.how})`, [back.id]: `${returnSeat.coach}-${returnSeat.seat} (${returnSeat.how})` }, cart };
+  return { day, trains: config.legs.map((leg) => rowOf(leg)).map((row) => `${row.train} ${row.departure}`), seats: { [outbound.id]: `${outboundSeat.coach}-${outboundSeat.seat} (${outboundSeat.how})`, ...(back ? { [back.id]: `${returnSeat.coach}-${returnSeat.seat} (${returnSeat.how})` } : {}) }, cart };
 }
 
 async function commitDay(page, api, config, prepared) {
@@ -664,6 +680,21 @@ async function commitDay(page, api, config, prepared) {
 async function book(config) {
   // --- the days come from the account's gap; --count limits how many, default every such day in the window
   const count = flagValue('count') ? Number(flagValue('count')) : Infinity;
+  const until = flagValue('until');
+  const on = flagValue('on');
+  const legId = flagValue('leg');
+  const validDay = (day) => {
+    const date = new Date(`${day}T00:00:00Z`);
+    return /^\d{4}-\d{2}-\d{2}$/.test(day) && !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === day;
+  };
+  if (until && !validDay(until)) fail('config', '--until must be a valid YYYY-MM-DD date');
+  if (on && !validDay(on)) fail('config', '--on must be a valid YYYY-MM-DD date');
+  if (legId) {
+    if (!on) fail('config', '--leg requires --on=YYYY-MM-DD to identify the exact day');
+    const leg = config.legs.find((entry) => entry.id === legId);
+    if (!leg) fail('config', `unknown leg ${legId}`);
+    config = { ...config, legs: [leg] };
+  }
   const confirm = !!flag('confirm');
   result.step = 'browser';
   const { context, page, api } = await openBrowser({ headless: !!flag('headless') });
@@ -674,7 +705,8 @@ async function book(config) {
     if (!result.session.signedIn) fail('session', `not signed in (${result.session.how})`, 2);
     for (let done = 0; done < count; done++) {
       // --- re-read the account before each day: never book a leg that has a PNR
-      const days = targetDays(config, isoDay(new Date()));
+      const days = targetDays(config, isoDay(new Date())).filter((day) => (!until || day <= until) && (!on || day === on));
+      if (!days.length) { result.note = 'no working day in the selected date range'; break; }
       const rows = await accountPlan(api, config, days, days[0], true);
       const day = days.find((candidate) => !result.booked.some((entry) => entry.day === candidate)
         && config.legs.every((leg) => rows.find((row) => row.day === candidate && row.leg === leg.id)?.state === 'to-book'));

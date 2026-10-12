@@ -15,6 +15,7 @@ received contains nothing personal, so you can pass it on as it is.
 | `scripts/commute.mjs` | helper script: `status` (read-only plan), `login`, `record` |
 | `scripts/package.json` | declares `playwright-core` (drives the Chrome already installed; no browser download) |
 | `scripts/save-credential.ps1` | saves the lefrecce.it username and password encrypted (Windows DPAPI) for automatic sign-in |
+| `scripts/setup.ps1` | first-run questionnaire for personal config and encrypted sign-in credential |
 
 Personal state, all in `~/.trenitalia-commute/` (Windows: `%USERPROFILE%\.trenitalia-commute\`):
 `config.json`, `credential.xml` (optional), `browser-profile/` (the script's own signed-in Chrome profile),
@@ -30,31 +31,27 @@ Personal state, all in `~/.trenitalia-commute/` (Windows: `%USERPROFILE%\.trenit
    npm install
    ```
 
-3. Personal config: copy `config.example.json` to `~/.trenitalia-commute/config.json` and fill every `CHANGE-ME`
-   value with your stations, train types, time windows and fare details. The script rejects unfilled placeholders.
+3. Run first-time setup in a local interactive PowerShell terminal. It asks for the traveller, card, stations,
+   both train services and time windows, the exact free fare names and IDs, preferred carriages, and the
+   Le Frecce username and password. The password prompt is hidden. Config and the Windows-encrypted credential
+   are saved under `%USERPROFILE%\.trenitalia-commute`, outside the plugin and Git repository.
 
    ```powershell
-   New-Item -ItemType Directory -Force "$HOME\.trenitalia-commute" | Out-Null
-   Copy-Item "<skill folder>\config.example.json" "$HOME\.trenitalia-commute\config.json"
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<skill folder>\scripts\setup.ps1"
    ```
 
-4. Sign in once. A Chrome window opens on the script's own profile; sign in there. The session is kept for the
-   next runs.
+   If you already have a config and only need to replace the saved sign-in, run `save-credential.ps1` instead.
+   To replace an existing config intentionally, pass `-Force` to `setup.ps1`.
+
+4. Verify sign-in. A Chrome window opens on the script's own profile; the session is kept for later runs.
 
    ```powershell
    node <skill folder>\scripts\commute.mjs login
    ```
 
-5. Recommended, so Claude (or a scheduled task) signs in by itself whenever the session expires: save the
-   credential once. On Windows it is encrypted with DPAPI, readable only by your Windows user on this machine;
-   you type it into the prompt, nothing is printed:
-
-   ```powershell
-   powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<skill folder>\scripts\save-credential.ps1"
-   ```
-
-   Elsewhere: set `TRENITALIA_USERNAME` and `TRENITALIA_PASSWORD` in the environment of the run. The password is
-   never written into the config, the skill, the output or the logs, and Claude never sees it.
+   Outside Windows: copy `config.example.json` to `~/.trenitalia-commute/config.json`, replace every placeholder,
+   and set `TRENITALIA_USERNAME` and `TRENITALIA_PASSWORD` in the run environment. The password is never written
+   into the config, the skill, the output or the logs.
 
 ## Commands
 
@@ -65,6 +62,8 @@ node commute.mjs status --from=YYYY-MM-DD
 node commute.mjs status --visible       # with a Chrome window, to watch
 node commute.mjs book --confirm         # book every day the account still misses (both legs), €0,00 only
 node commute.mjs book --count=2 --confirm   # only the next two such days
+node commute.mjs book --until=2030-06-30 --confirm  # never book after this date
+node commute.mjs book --on=2030-06-12 --leg=outbound --count=1 --confirm  # one specified missing leg
 node commute.mjs book --count=1         # dry run: stops on the payment page, books nothing
 node commute.mjs login                  # sign in from the saved credential (--manual: wait for you)
 node commute.mjs record                 # record the site's API calls while you book one day by hand

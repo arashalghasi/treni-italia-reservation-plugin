@@ -7,8 +7,8 @@ param([string]$Folder = (Join-Path $HOME '.trenitalia-commute'))
 New-Item -ItemType Directory -Force $Folder | Out-Null
 $file = Join-Path $Folder 'credential.xml'
 $username = (Read-Host 'lefrecce.it username').Trim()
-if (-not $username -or $username -match '\\') { Write-Host 'Not a lefrecce.it username, nothing saved.'; exit 1 }
+if (-not $username -or $username -match '\\') { throw 'Not a lefrecce.it username, nothing saved.' }
 $password = Read-Host 'lefrecce.it password (hidden)' -AsSecureString
-if ($password.Length -eq 0) { Write-Host 'Empty password, nothing saved.'; exit 1 }
+if ($password.Length -eq 0) { throw 'Empty password, nothing saved.' }
 New-Object System.Management.Automation.PSCredential($username, $password) | Export-Clixml -LiteralPath $file
 Write-Host 'Credential saved.'
