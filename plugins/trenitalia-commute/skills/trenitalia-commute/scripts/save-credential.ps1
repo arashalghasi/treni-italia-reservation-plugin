@@ -2,7 +2,12 @@
 # only this Windows user on this machine can read the file back. The password is never printed.
 # Console prompts on purpose: the Windows credential dialog of Get-Credential prefills the Windows
 # account (for example PC-NAME\Administrator) and saved that instead of the lefrecce.it username.
-param([string]$Folder = (Join-Path $HOME '.trenitalia-commute'))
+param([string]$Folder)
+
+if (-not [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+  throw 'This encrypted credential helper only supports Windows. Use login --manual on macOS or Linux.'
+}
+if (-not $Folder) { $Folder = Join-Path $env:USERPROFILE '.trenitalia-commute' }
 
 New-Item -ItemType Directory -Force $Folder | Out-Null
 $file = Join-Path $Folder 'credential.xml'

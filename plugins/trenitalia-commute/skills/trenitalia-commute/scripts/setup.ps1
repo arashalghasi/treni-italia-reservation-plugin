@@ -1,11 +1,15 @@
 # First-run setup. All answers stay in the user's private ~/.trenitalia-commute folder.
 # Run this in a local PowerShell terminal so the password is entered only into a hidden prompt.
 param(
-  [string]$Folder = (Join-Path $env:USERPROFILE '.trenitalia-commute'),
+  [string]$Folder,
   [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+  throw 'This setup script uses Windows credential encryption. Ask the skill to create config.json and use login --manual on macOS or Linux.'
+}
+if (-not $Folder) { $Folder = Join-Path $env:USERPROFILE '.trenitalia-commute' }
 $configFile = Join-Path $Folder 'config.json'
 if ((Test-Path -LiteralPath $configFile) -and -not $Force) {
   throw "Config already exists at $configFile. Use -Force only when you intend to replace it."
@@ -48,6 +52,7 @@ function Ask-Leg([string]$Id, [string]$From, [string]$To) {
 Write-Host 'Commute setup. Enter the details for the traveller and both daily trains.'
 $firstName = Ask-Required 'Traveller first name'
 $lastName = Ask-Required 'Traveller last name'
+$accountLastName = (Read-Host 'Le Frecce account holder surname if different from traveller (optional)').Trim()
 $card = Ask-Required 'Tutto Treno / Carta Tutto Treno card number'
 $homeStation = Ask-Required 'Home station, as shown on Le Frecce'
 $workStation = Ask-Required 'Work station, as shown on Le Frecce'
@@ -92,6 +97,7 @@ $config = [ordered]@{
   seats = [ordered]@{ carriages = $carriages; rules = $rules; knownGood = @() }
   window = [ordered]@{ workingDays = $workingDays; weekdays = $weekdays; extraHolidays = $holidays; minutesBeforeDeparture = $minutesBeforeDeparture }
 }
+if ($accountLastName) { $config['account'] = [ordered]@{ lastName = $accountLastName } }
 
 New-Item -ItemType Directory -Force -Path $Folder | Out-Null
 & (Join-Path $PSScriptRoot 'save-credential.ps1') -Folder $Folder

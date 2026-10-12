@@ -2,16 +2,18 @@
   "name": "trenitalia-commute",
   "private": true,
   "type": "module",
-  "description": "Trenitalia commute helper: session, booked legs and matching trains per workday on lefrecce.it (playwright-core with the installed Chrome)",
+  "description": "Trenitalia commute helper: session, booked legs and matching trains per workday on lefrecce.it (playwright-core with installed Chrome or Edge)",
   "scripts": {
+    "doctor": "node commute.mjs doctor",
+    "test": "node --test auth-diagnostics.test.mjs",
     "status": "node commute.mjs status",
     "login": "node commute.mjs login",
     "record": "node commute.mjs record"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "dependencies": {
-    "playwright-core": "^1.48.0"
+    "playwright-core": "1.64.0"
   }
 }

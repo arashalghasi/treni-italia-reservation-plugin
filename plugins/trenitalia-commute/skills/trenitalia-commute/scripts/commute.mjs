@@ -7,19 +7,22 @@
 //       window unless --count limits the number.
 //       Without --confirm it stops on the payment page; --confirm accepts the conditions of carriage.
 //   node commute.mjs login [--manual]
-//       Visible Chrome on the dedicated profile: signs in from the saved credential (save-credential.ps1);
-//       with --manual it also waits (at most 5 minutes) for you to sign in by hand.
+//       Visible Chrome/Edge on the dedicated profile: signs in from the saved credential (save-credential.ps1);
+//       --manual skips the saved credential and waits (at most 5 minutes) for you to sign in by hand.
+//   node commute.mjs doctor
+//       Check Node, the installed Playwright dependency, browser launch, config and credential availability.
 //   node commute.mjs record
-//       Visible Chrome that records the site's API calls (personal values masked) while you book one day by hand.
+//       Visible plugin browser that records the site's API calls (personal values masked) while you book one day by hand.
 //
 // Common flag: --config=<path> (default: $TRENITALIA_COMMUTE_CONFIG or ~/.trenitalia-commute/config.json).
 // Output: one JSON line on stdout, a readable summary on stderr. Exit code 0 = ok, 1 = error, 2 = sign-in needed.
-// Uses the Chrome installed on the machine through playwright-core (no browser download).
-import { chromium } from 'playwright-core';
+// Uses installed Chrome or Edge through playwright-core (no browser download).
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { authFailure } from './auth-diagnostics.mjs';
 
 const SITE = 'https://www.lefrecce.it/Channels.Website.WEB/';
 const API = 'https://www.lefrecce.it/Channels.Website.BFF.WEB/website';
@@ -33,6 +36,8 @@ const configFile = path.resolve(flagValue('config') || process.env.TRENITALIA_CO
 const home = path.dirname(configFile);
 const profileDirectory = path.join(home, 'browser-profile');
 const runsDirectory = path.join(home, 'runs');
+const scriptsDirectory = path.dirname(fileURLToPath(import.meta.url));
+const browserChannel = process.env.TRENITALIA_BROWSER_CHANNEL || 'chrome';
 
 const two = (number) => String(number).padStart(2, '0');
 const isoDay = (date) => `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}`;
@@ -49,14 +54,35 @@ const fail = (step, message, exitCode = 1) => { const error = new Error(message)
 function readConfig() {
   if (!fs.existsSync(configFile)) fail('config', `config not found: ${configFile} (copy config.example.json there and fill it)`);
   const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  if (!config || typeof config !== 'object' || Array.isArray(config)) fail('config', 'config.json must contain a JSON object');
   if (JSON.stringify(config).includes('CHANGE-ME')) fail('config', 'config contains CHANGE-ME placeholders');
   for (const key of ['traveller', 'stations', 'legs']) if (!config[key]) fail('config', `config field missing: ${key}`);
-  for (const key of ['firstName', 'lastName']) if (!config.traveller[key]) fail('config', `traveller.${key} missing`);
+  const requiredText = (value, label) => {
+    if (typeof value !== 'string' || !value.trim()) fail('config', `${label} must be non-empty text`);
+  };
+  for (const key of ['firstName', 'lastName', 'tuttoTrenoCardNumber']) requiredText(config.traveller[key], `traveller.${key}`);
+  if (config.account) requiredText(config.account.lastName, 'account.lastName');
+  if (!Array.isArray(config.legs) || config.legs.length === 0) fail('config', 'legs must be a non-empty array');
+  const ids = new Set();
   for (const leg of config.legs) {
-    for (const key of ['id', 'from', 'to', 'service', 'departAfter', 'departBefore']) if (!leg[key]) fail('config', `legs[${leg.id || '?'}].${key} missing`);
-    for (const end of [leg.from, leg.to]) if (!config.stations[end]) fail('config', `legs[${leg.id}] uses unknown station key "${end}"`);
+    if (!leg || typeof leg !== 'object') fail('config', 'each leg must be an object');
+    for (const key of ['id', 'from', 'to', 'service', 'departAfter', 'departBefore', 'offerName']) requiredText(leg[key], `legs[${leg.id || '?'}].${key}`);
+    if (ids.has(leg.id)) fail('config', `duplicate leg id ${leg.id}`);
+    ids.add(leg.id);
+    for (const end of [leg.from, leg.to]) {
+      if (!config.stations[end]) fail('config', `legs[${leg.id}] uses unknown station key "${end}"`);
+      requiredText(config.stations[end], `stations.${end}`);
+    }
+    if (leg.from === leg.to) fail('config', `legs[${leg.id}] has the same origin and destination`);
+    if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(leg.departAfter) || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(leg.departBefore)
+      || leg.departAfter > leg.departBefore) fail('config', `legs[${leg.id}] needs an HH:mm departure window in order`);
+    if (!/^\d+$/.test(String(leg.offerId ?? '')) || Number(leg.offerId) < 1) fail('config', `legs[${leg.id}].offerId must be a positive numeric fare ID`);
   }
   config.window = { workingDays: 20, weekdays: [1, 2, 3, 4, 5], extraHolidays: [], minutesBeforeDeparture: 15, ...config.window };
+  if (!Number.isInteger(config.window.workingDays) || config.window.workingDays < 1 || config.window.workingDays > 366) fail('config', 'window.workingDays must be between 1 and 366');
+  if (!Array.isArray(config.window.weekdays) || !config.window.weekdays.length
+    || config.window.weekdays.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) fail('config', 'window.weekdays must contain day numbers from 0 to 6');
+  if (!Array.isArray(config.window.extraHolidays)) fail('config', 'window.extraHolidays must be an array');
   return config;
 }
 
@@ -92,16 +118,26 @@ function targetDays(config, fromDay, untilDay = null) {
 
 // --- saved credential: environment variables, or (Windows) a DPAPI-encrypted file written by Export-Clixml
 function savedCredential() {
+  if (!!process.env.TRENITALIA_USERNAME !== !!process.env.TRENITALIA_PASSWORD) {
+    fail('credential', 'set both TRENITALIA_USERNAME and TRENITALIA_PASSWORD, or neither');
+  }
   if (process.env.TRENITALIA_USERNAME && process.env.TRENITALIA_PASSWORD) {
     return { username: process.env.TRENITALIA_USERNAME, password: process.env.TRENITALIA_PASSWORD };
   }
   const file = path.join(home, 'credential.xml');
   if (process.platform !== 'win32' || !fs.existsSync(file)) return null;
-  const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-    '$c = Import-Clixml -LiteralPath $env:TRENITALIA_CREDENTIAL_FILE; $c.UserName; $c.GetNetworkCredential().Password'],
-  { encoding: 'utf8', env: { ...process.env, TRENITALIA_CREDENTIAL_FILE: file } });
+  let output;
+  try {
+    output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      '$c = Import-Clixml -LiteralPath $env:TRENITALIA_CREDENTIAL_FILE; $c.UserName; $c.GetNetworkCredential().Password'],
+    { encoding: 'utf8', env: { ...process.env, TRENITALIA_CREDENTIAL_FILE: file }, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (error) {
+    if (error.code === 'ENOENT') fail('dependency', 'powershell.exe is required to read the Windows credential file');
+    fail('credential', 'saved credential cannot be decrypted in this process context; run as the Windows user who saved it, save it for this context, or use login --manual');
+  }
   const [username, password] = output.split(/\r?\n/);
-  return username && password ? { username, password } : null;
+  if (!username || !password) fail('credential', 'saved credential is incomplete; run save-credential.ps1 locally');
+  return { username, password };
 }
 
 // --- mask known personal values in recordings and diagnostic samples
@@ -121,12 +157,86 @@ function masker(config, credential) {
   return mask;
 }
 
+function requireNode() {
+  if (Number(process.versions.node.split('.')[0]) < 22) {
+    fail('runtime', `Node.js ${process.version} is too old; install Node.js 22 or newer`);
+  }
+}
+
+function browserOptions(headless) {
+  if (process.env.CHROME_PATH) return { headless, executablePath: process.env.CHROME_PATH };
+  if (!['chrome', 'msedge'].includes(browserChannel)) {
+    fail('config', 'TRENITALIA_BROWSER_CHANNEL must be chrome or msedge');
+  }
+  return { headless, channel: browserChannel };
+}
+
+async function playwrightChromium() {
+  try {
+    return (await import('playwright-core')).chromium;
+  } catch (error) {
+    if (error.code === 'ERR_MODULE_NOT_FOUND') {
+      fail('dependency', `playwright-core is missing from this plugin copy; run npm ci in ${scriptsDirectory}`);
+    }
+    fail('dependency', `playwright-core could not load on Node.js ${process.version}: ${String(error.message).split('\n')[0]}`);
+  }
+}
+
+async function doctor() {
+  const issues = [];
+  const checks = {
+    platform: process.platform,
+    architecture: process.arch,
+    nodeVersion: process.version,
+    nodeSupported: Number(process.versions.node.split('.')[0]) >= 22,
+    configPresent: fs.existsSync(configFile),
+    browserProfilePresent: fs.existsSync(profileDirectory),
+    credentialMode: !!process.env.TRENITALIA_USERNAME !== !!process.env.TRENITALIA_PASSWORD ? 'incomplete environment credential'
+      : process.env.TRENITALIA_USERNAME && process.env.TRENITALIA_PASSWORD ? 'environment'
+      : process.platform === 'win32' && fs.existsSync(path.join(home, 'credential.xml')) ? 'Windows credential file'
+        : 'manual browser sign-in',
+    browser: process.env.CHROME_PATH ? 'custom executable' : browserChannel,
+  };
+  if (checks.configPresent) {
+    try { readConfig(); checks.configValid = true; } catch { checks.configValid = false; }
+  }
+  if (!checks.nodeSupported) issues.push('Install Node.js 22 or newer');
+  if (!checks.configPresent || checks.configValid === false) issues.push('Create or correct the private config.json');
+  if (checks.credentialMode === 'incomplete environment credential') issues.push('Set both credential environment variables, or neither');
+  if (checks.credentialMode === 'Windows credential file') {
+    try { savedCredential(); checks.credentialUsable = true; }
+    catch (error) { checks.credentialUsable = false; issues.push(error.message); }
+  }
+  try {
+    const chromium = await playwrightChromium();
+    checks.playwrightInstalled = true;
+    const packageFile = path.join(scriptsDirectory, 'node_modules', 'playwright-core', 'package.json');
+    if (fs.existsSync(packageFile)) checks.playwrightVersion = JSON.parse(fs.readFileSync(packageFile, 'utf8')).version;
+    const browser = await chromium.launch(browserOptions(true));
+    try { checks.browserVersion = browser.version(); checks.browserLaunch = true; }
+    finally { await browser.close(); }
+  } catch (error) {
+    checks.playwrightInstalled = error.step !== 'dependency';
+    checks.browserLaunch = false;
+    issues.push(error.step === 'dependency' ? 'Run npm ci in the installed plugin scripts folder'
+      : 'The selected browser could not launch; install Chrome or Edge, check workstation policies, or set CHROME_PATH');
+  }
+  checks.runtimeReady = checks.nodeSupported && checks.configValid === true && checks.playwrightInstalled && checks.browserLaunch;
+  checks.issues = issues;
+  result.doctor = checks;
+  result.ok = true;
+}
+
 async function openBrowser({ headless }) {
   fs.mkdirSync(profileDirectory, { recursive: true });
   // --- English interface: the booking steps and their labels were verified in English
-  const options = { headless, viewport: { width: 1366, height: 900 }, locale: 'en-GB' };
-  if (process.env.CHROME_PATH) options.executablePath = process.env.CHROME_PATH; else options.channel = 'chrome';
-  const context = await chromium.launchPersistentContext(profileDirectory, options);
+  const options = { ...browserOptions(headless), viewport: { width: 1366, height: 900 }, locale: 'en-GB' };
+  const chromium = await playwrightChromium();
+  let context;
+  try { context = await chromium.launchPersistentContext(profileDirectory, options); }
+  catch (error) {
+    fail('browser', `The selected browser could not open the plugin profile: ${String(error.message).split('\n')[0]}. Run doctor; close another plugin browser using this profile, or select Chrome/Edge with TRENITALIA_BROWSER_CHANNEL`);
+  }
   // --- pages load in 1-5 s and elements appear at once: navigation at most 20 s, every other step at most 10 s
   context.setDefaultNavigationTimeout(20000);
   context.setDefaultTimeout(10000);
@@ -165,7 +275,7 @@ async function evidence(page, step) {
   } catch { /* the page may already be closed */ }
 }
 
-// --- signed in as the traveller = unexpired session token + traveller's surname in the header + trip list answers.
+// --- signed in to the configured account = unexpired session token + account surname in header + trip list answers.
 //     Each alone is not enough: signed out, travel/solutions answers 200 with an empty list, and auth/me answers 400
 //     also when signed in. An empty list from a signed-out page would look like "nothing booked".
 async function session(page, api, config) {
@@ -176,17 +286,20 @@ async function session(page, api, config) {
     try { return { present: true, expiresAt: (JSON.parse(atob(value.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).exp || 0) * 1000 || null }; } catch { return { present: true, expiresAt: null }; }
   });
   const unexpired = token.present && (!token.expiresAt || token.expiresAt > Date.now() + 60000);
-  const surname = config.traveller.lastName.toLowerCase();
+  const surname = (config.account?.lastName || config.traveller.lastName).toLowerCase();
   let header = '';
   for (let attempt = 0; unexpired && attempt < 10 && !header.includes(surname); attempt++) {
     header = (await page.evaluate(() => document.querySelector('header')?.innerText || '').catch(() => '')).toLowerCase();
     if (!header.includes(surname)) await wait(500);
   }
-  const accountMatchesTraveller = unexpired ? header.includes(surname) : null;
+  const accountMatchesHolder = unexpired ? header.includes(surname) : null;
   const today = italianDay(isoDay(new Date()));
   const probe = unexpired ? await api('POST', '/travel/solutions', { travelGroup: 'TICKET', searchType: 'DEPARTURE_DATE', fromDate: today, toDate: today, code: null, limit: 1, offset: 0 }) : null;
-  const signedIn = unexpired && accountMatchesTraveller && probe.status === 200 && Array.isArray(probe.json?.solutions);
-  return { signedIn, accountMatchesTraveller, tokenExpiresAt: token.expiresAt ? new Date(token.expiresAt).toISOString() : null };
+  const tripsReadable = probe?.status === 200 && Array.isArray(probe.json?.solutions);
+  const signedIn = !!(unexpired && accountMatchesHolder && tripsReadable);
+  return { signedIn, tokenPresent: token.present, tokenUnexpired: !!unexpired, accountMatchesHolder,
+    accountMatchesTraveller: accountMatchesHolder, // keep the existing result field for callers
+    tripsReadable, tripStatus: probe?.status ?? null, tokenExpiresAt: token.expiresAt ? new Date(token.expiresAt).toISOString() : null };
 }
 
 async function signIn(page, api, config, credential) {
@@ -207,16 +320,17 @@ async function signIn(page, api, config, credential) {
   await evidence(page, 'sign-in');
   const message = await page.evaluate(() => [...document.querySelectorAll('.alert, .error, .invalid-feedback, [role=alert], .modal.show')]
     .map((element) => element.innerText.trim()).filter(Boolean).join(' | ').slice(0, 200)).catch(() => '');
-  return { signedIn: false, accountMatchesTraveller: null, pageMessage: message || null };
+  return { ...await session(page, api, config), pageMessage: message || null };
 }
 
 async function ensureSession(page, api, config) {
   let state = await session(page, api, config);
   if (state.signedIn) return { ...state, how: 'existing session' };
+  if (state.tokenUnexpired) return { ...state, how: 'existing session did not verify' };
   const credential = savedCredential();
   if (!credential) return { ...state, how: 'no saved credential' };
   state = await signIn(page, api, config, credential);
-  return { ...state, how: state.signedIn ? 'saved credential' : 'saved credential rejected or challenge shown' };
+  return { ...state, how: state.signedIn ? 'saved credential' : 'saved credential did not verify' };
 }
 
 async function stationIds(api, config) {
@@ -352,10 +466,10 @@ async function status(config) {
     result.step = 'session';
     result.session = await ensureSession(page, api, config);
     result.window = { from: days[0], to: days[days.length - 1], workingDays: days.length };
+    if (!result.session.signedIn) fail('session', authFailure(result.session), 2);
     result.plan = await accountPlan(api, config, days, fromDay, result.session.signedIn);
     result.toBook = result.plan.filter((row) => row.state === 'to-book').length;
     summary(result.plan);
-    if (!result.session.signedIn) fail('session', `not signed in (${result.session.how}): run "node commute.mjs login"`, 2);
     result.ok = true;
   } catch (error) {
     if (error.exitCode !== 2) await evidence(page, error.step || result.step);
@@ -705,7 +819,7 @@ async function book(config) {
   try {
     result.step = 'session';
     result.session = await ensureSession(page, api, config);
-    if (!result.session.signedIn) fail('session', `not signed in (${result.session.how})`, 2);
+    if (!result.session.signedIn) fail('session', authFailure(result.session), 2);
     for (let done = 0; done < count; done++) {
       // --- re-read the account before each day: never book a leg that has a PNR
       const today = isoDay(new Date());
@@ -737,19 +851,22 @@ async function login(config) {
     result.step = 'session';
     let state = await session(page, api, config);
     if (!state.signedIn) {
-      const credential = savedCredential();
-      if (credential) state = await signIn(page, api, config, credential);
-      // --- waiting for a person only when asked: a sign-in by hand takes 1-2 minutes, so at most 5
-      if (!state.signedIn && flag('manual')) {
-        await page.goto(`${SITE}#/login`, { waitUntil: 'load' }).catch(() => {});
-        process.stderr.write('Sign in in the Chrome window (at most 5 minutes)...\n');
-        for (let attempt = 0; attempt < 100 && !state.signedIn; attempt++) { await wait(3000); state = await session(page, api, config).catch(() => state); }
+      if (flag('manual')) {
+        await page.goto(`${SITE}#/login`, { waitUntil: 'load' });
+        process.stderr.write('Sign in in the plugin browser window (at most 5 minutes)...\n');
+        for (let attempt = 0; attempt < 100 && !state.signedIn; attempt++) {
+          await wait(3000);
+          state = await session(page, api, config).catch(() => state);
+          if (state.tokenUnexpired && state.accountMatchesHolder === false) break;
+        }
+      } else if (!state.tokenUnexpired) {
+        const credential = savedCredential();
+        if (credential) state = await signIn(page, api, config, credential);
+        else state = { ...state, how: 'no saved credential' };
       }
     }
     result.session = state;
-    if (!state.signedIn) {
-      fail('session', savedCredential() ? 'saved credential did not sign in (see evidence and pageMessage)' : 'no saved credential: run save-credential.ps1, or login --manual', 2);
-    }
+    if (!state.signedIn) fail('session', authFailure(state), 2);
     result.ok = true;
   } catch (error) {
     await evidence(page, error.step || result.step);
@@ -784,7 +901,7 @@ async function record(config) {
     fs.appendFileSync(file, JSON.stringify(line) + '\n');
     calls++;
   });
-  process.stderr.write(`Recording to ${file}. Book one day by hand, then close the Chrome window (limit 30 minutes).\n`);
+  process.stderr.write(`Recording to ${file}. Book one day by hand, then close the plugin browser window (limit 30 minutes).\n`);
   await new Promise((resolve) => { context.on('close', resolve); setTimeout(resolve, 30 * 60000).unref(); });
   await context.close().catch(() => {});
   result.recording = file;
@@ -794,12 +911,16 @@ async function record(config) {
 
 async function main() {
   try {
-    const config = readConfig();
-    if (command === 'status') await status(config);
-    else if (command === 'book') await book(config);
-    else if (command === 'login') await login(config);
-    else if (command === 'record') await record(config);
-    else fail('command', `unknown command "${command}" (status | book | login | record)`);
+    if (command === 'doctor') await doctor();
+    else {
+      requireNode();
+      const config = readConfig();
+      if (command === 'status') await status(config);
+      else if (command === 'book') await book(config);
+      else if (command === 'login') await login(config);
+      else if (command === 'record') await record(config);
+      else fail('command', `unknown command "${command}" (doctor | status | book | login | record)`);
+    }
     result.step = 'done';
   } catch (error) {
     result.step = error.step || result.step;
@@ -808,8 +929,13 @@ async function main() {
   }
   result.finishedAt = new Date().toISOString();
   if (command === 'status') {
-    fs.mkdirSync(runsDirectory, { recursive: true });
-    fs.writeFileSync(path.join(runsDirectory, `${stamp()}_status.json`), JSON.stringify(result, null, 2));
+    try {
+      fs.mkdirSync(runsDirectory, { recursive: true });
+      fs.writeFileSync(path.join(runsDirectory, `${stamp()}_status.json`), JSON.stringify(result, null, 2));
+    } catch (error) {
+      result.logError = `could not save the private status report (${error.code || 'unknown error'})`;
+      if (!result.error) { result.ok = false; result.step = 'log'; process.exitCode = 1; }
+    }
   }
   console.log(JSON.stringify(result));
 }

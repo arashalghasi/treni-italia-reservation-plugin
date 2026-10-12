@@ -9,7 +9,7 @@
       "name": "trenitalia-commute",
       "source": "./plugins/trenitalia-commute",
       "description": "Books the commute days the account is still missing, at €0.00 only.",
-      "version": "1.0.2"
+      "version": "1.0.3"
     }
   ]
 }

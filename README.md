@@ -40,28 +40,67 @@ codex plugin add trenitalia-commute@trenitalia-commute-local
 
 In Codex Desktop, open a new chat and ask: *"Use $trenitalia-commute to set up my commute."* You can also
 find the plugin under **Plugins** after adding the marketplace. Later ask for the specific dates to reserve.
-`commute.mjs` starts Chrome and needs network access; approve the command when Codex asks.
+`commute.mjs` starts Chrome or Edge and needs network access; approve the command when Codex asks.
 
-## Before the first booking (once per machine, both tools share it)
+## Update an existing installation
 
-1. Install Node.js 18+ with npm and Google Chrome. In the **installed plugin's**
-   `skills/trenitalia-commute/scripts/` folder, run `npm ci` to install `playwright-core`. The installed folder
+After a new release, refresh the marketplace and reinstall the plugin, then run `npm ci` in the new installed
+`scripts/` folder. The private `~/.trenitalia-commute/` folder is separate from the plugin cache.
+
+```powershell
+claude plugin marketplace update trenitalia-commute-local
+claude plugin update trenitalia-commute@trenitalia-commute-local
+codex plugin marketplace upgrade trenitalia-commute-local
+codex plugin add trenitalia-commute@trenitalia-commute-local
+```
+
+Restart Claude or open a new Codex chat to load the updated skill. Version 1.0.3 adds workstation diagnostics,
+separate login failure reasons, manual sign-in that skips stored credentials, and stricter config checks.
+
+## Before the first booking (on each workstation)
+
+1. Install Node.js 22+ with npm and Google Chrome or Microsoft Edge. In the **installed plugin's**
+   `skills/trenitalia-commute/scripts/` folder, run `npm ci` to install the locked `playwright-core` version. The installed folder
    is under `%USERPROFILE%\.codex\plugins\cache\trenitalia-commute-local\trenitalia-commute\<version>\` for Codex,
    or `%USERPROFILE%\.claude\plugins\cache\trenitalia-commute-local\trenitalia-commute\<version>\` for Claude.
-   Installing dependencies only in a source checkout does not install them in the plugin cache.
-2. Ask the skill to set up your commute. It asks for the traveller and card, exact stations, service and departure
+   On macOS/Linux the cache is under `~/.codex/plugins/cache/` or `~/.claude/plugins/cache/`. Installing dependencies
+   only in a source checkout does not install them in the plugin cache. Repeat `npm ci` after a plugin update.
+2. Ask the skill to set up your commute. It asks for the traveller and card, an account holder surname if different,
+   exact stations, service and departure
    window for each direction, free offer names and IDs, travel days, holidays, and seat preferences. It writes
-   `config.json` in `%USERPROFILE%\.trenitalia-commute\`, outside the plugin. You can instead run
+   `config.json` in `~/.trenitalia-commute/`, outside the plugin. On Windows you can instead run
    `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<installed skill folder>\scripts\setup.ps1"` in your
-   own terminal; it asks the same questions. Do not put personal values in this repository.
-3. Save your Le Frecce sign-in through the local hidden prompt:
-   `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<installed skill folder>\scripts\save-credential.ps1" -Folder "$env:USERPROFILE\.trenitalia-commute"`.
-   The script prints the destination path. Verify that it is the same folder as `config.json`, then run
-   `node "<installed skill folder>\scripts\commute.mjs" login` and `status`. If sign-in is rejected or challenged,
-   stop and resolve that before booking.
+   own terminal; it asks the same questions. Do not put personal values in this repository or copy a colleague's
+   config without reviewing the traveller, route, fare and time windows.
+3. Run `node "<installed skill folder>\scripts\commute.mjs" doctor` (on macOS/Linux, use `/` path separators).
+   It checks Node, Playwright, browser launch and config without visiting Le Frecce or printing credentials.
+   Run it in the same execution context that will run bookings: a sandboxed agent can see a different Node version
+   or Windows credential identity from your own terminal. `doctor.runtimeReady` covers the program setup;
+   `doctor.credentialUsable` checks whether this process can decrypt a saved Windows credential.
+   Set `TRENITALIA_BROWSER_CHANNEL=msedge` to use Edge, or `CHROME_PATH` to select a custom Chromium executable.
+4. Sign in **on this workstation**:
+   - Windows: run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<installed skill folder>\scripts\save-credential.ps1" -Folder "$env:USERPROFILE\.trenitalia-commute"`.
+     It stores a Windows-encrypted file. It can only be decrypted by the same Windows user on the same machine;
+     each colleague must save their own. Then run `node "<installed skill folder>\scripts\commute.mjs" login`.
+   - Windows, macOS or Linux: run `node "<installed skill folder>/scripts/commute.mjs" login --manual` and sign in
+     in the browser window the plugin opens. This skips the saved credential. The plugin uses a dedicated browser
+     profile, so being signed in in your everyday Chrome window does not sign in the plugin. The session persists
+     until Le Frecce expires it; sign in manually again when needed.
+5. Run `status` before booking. If it reports a site login error, account mismatch or unreadable trip list, stop
+   and resolve that specific error. Do not retry a rejected password in a loop.
+
+On macOS/Linux, manual sign-in remains usable only while that browser session is valid. An unattended weekly run
+will stop if Le Frecce expires it. For unattended sign-in on those systems, supply both `TRENITALIA_USERNAME` and
+`TRENITALIA_PASSWORD` through a secure process environment; the plugin does not provide a macOS/Linux keychain
+integration. A workstation's browser policy can also prevent automation even when ordinary browsing works;
+`doctor` reports browser launch separately from website login.
 
 Personal data, the credential, the browser profile and the run logs live only in `~/.trenitalia-commute/`,
 never in this folder.
+
+The browser and Node requirements follow [Playwright's supported platforms](https://playwright.dev/docs/intro)
+and [browser channels](https://playwright.dev/docs/browsers). Windows credential files use
+[DPAPI and cannot be moved to another account or computer](https://learn.microsoft.com/powershell/module/microsoft.powershell.utility/export-clixml).
 
 Installation commands follow the [Claude plugin guide](https://code.claude.com/docs/en/plugins) and the
 [Codex plugin guide](https://developers.openai.com/plugins/build/plugins).

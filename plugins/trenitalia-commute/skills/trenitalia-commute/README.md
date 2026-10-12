@@ -13,9 +13,9 @@ received contains nothing personal, so you can pass it on as it is.
 |---|---|
 | `SKILL.md` | the procedure Claude follows: rules, account check, plan, booking flow, traps, report |
 | `config.example.json` | template of the personal config |
-| `scripts/commute.mjs` | helper script: `status` (read-only plan), `login`, `record` |
-| `scripts/package.json` | declares `playwright-core` (drives the Chrome already installed; no browser download) |
-| `scripts/save-credential.ps1` | saves the lefrecce.it username and password encrypted (Windows DPAPI) for automatic sign-in |
+| `scripts/commute.mjs` | helper script: `doctor`, `status` (read-only plan), `login`, `book`, `record` |
+| `scripts/package.json` | pins `playwright-core` (drives installed Chrome or Edge; no browser download) |
+| `scripts/save-credential.ps1` | saves the lefrecce.it username and password encrypted (Windows DPAPI only) for automatic sign-in |
 | `scripts/setup.ps1` | first-run questionnaire for personal config and encrypted sign-in credential |
 
 Personal state, all in `~/.trenitalia-commute/` (Windows: `%USERPROFILE%\.trenitalia-commute\`):
@@ -24,7 +24,7 @@ Personal state, all in `~/.trenitalia-commute/` (Windows: `%USERPROFILE%\.trenit
 
 ## Setup (once)
 
-1. Node 18 or newer (`node -v`) and Google Chrome.
+1. Node 22 or newer (`node -v`) and Google Chrome or Microsoft Edge.
 2. In the **installed plugin's** script folder, install the dependency:
 
    ```powershell
@@ -32,7 +32,8 @@ Personal state, all in `~/.trenitalia-commute/` (Windows: `%USERPROFILE%\.trenit
    npm ci
    ```
 
-3. Ask the skill to set up your commute. It asks for the traveller, card, stations, both train services and time
+3. Ask the skill to set up your commute. It asks for the traveller, account holder surname if different, card,
+   stations, both train services and time
    windows, exact free fare names and IDs, travel days, and seat preferences, then writes the private config. For
    the Le Frecce sign-in, it directs you to a local hidden credential prompt. Alternatively, run the complete
    questionnaire in your own PowerShell terminal; it asks all of these questions and the hidden sign-in prompt.
@@ -46,19 +47,25 @@ Personal state, all in `~/.trenitalia-commute/` (Windows: `%USERPROFILE%\.trenit
    If you already have a config and only need to replace the saved sign-in, run `save-credential.ps1` instead.
    To replace an existing config intentionally, pass `-Force` to `setup.ps1`.
 
-4. Verify sign-in. A Chrome window opens on the script's own profile; the session is kept for later runs.
+4. Run `doctor` to check the local runtime, then verify sign-in. A browser window opens on the script's own
+   profile; the session is kept for later runs. Each Windows user on each computer must save their own credential.
+   A credential XML file copied from another computer cannot be decrypted.
 
    ```powershell
+   node "<skill folder>\scripts\commute.mjs" doctor
    node <skill folder>\scripts\commute.mjs login
    ```
 
-   Outside Windows: copy `config.example.json` to `~/.trenitalia-commute/config.json`, replace every placeholder,
-   and set `TRENITALIA_USERNAME` and `TRENITALIA_PASSWORD` in the run environment. The password is never written
-   into the config, the skill, the output or the logs.
+   On macOS/Linux, ask the skill to write the private config, then run `login --manual` and sign in in the plugin
+   browser window. On any OS this also works when automatic sign-in is rejected. `--manual` does not submit the
+   saved credential. The ordinary Chrome profile and plugin profile are separate. For unattended runs outside
+   Windows, `TRENITALIA_USERNAME` and `TRENITALIA_PASSWORD` can be supplied securely in the run environment;
+   never put them in the config, command line or logs.
 
 ## Commands
 
 ```powershell
+node commute.mjs doctor                 # check workstation setup; visits no website
 node commute.mjs status                 # next 20 working days
 node commute.mjs status --days=5        # shorter window
 node commute.mjs status --from=YYYY-MM-DD
@@ -69,7 +76,8 @@ node commute.mjs book --from=2030-06-01 --until=2030-06-10 --confirm  # only mis
 node commute.mjs book --until=2030-06-30 --confirm  # never book after this date
 node commute.mjs book --on=2030-06-12 --leg=outbound --count=1 --confirm  # one specified missing leg
 node commute.mjs book --count=1         # dry run: stops on the payment page, books nothing
-node commute.mjs login                  # sign in from the saved credential (--manual: wait for you)
+node commute.mjs login                  # sign in from the local saved credential
+node commute.mjs login --manual         # skip saved credential; wait for local browser sign-in
 node commute.mjs record                 # record the site's API calls while you book one day by hand
 ```
 

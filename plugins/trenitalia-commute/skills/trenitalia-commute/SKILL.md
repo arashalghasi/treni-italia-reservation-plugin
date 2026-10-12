@@ -44,7 +44,8 @@ profile, run logs and recordings. Nothing personal lives in the skill folder, so
 as it is.
 
 On first use, if the config is missing, ask the user for **every value needed to build it**. Group the questions so
-they can answer in one reply: traveller first and last name and Tutto Treno card number; exact home and work station
+they can answer in one reply: traveller first and last name, Le Frecce account holder surname if different, and
+Tutto Treno card number; exact home and work station
 names; for **each direction**, train service code, earliest and latest departure (`HH:mm`), and exact free offer
 name and numeric ID; travel weekdays, extra no-travel dates, and how many working days to check ahead; minimum
 minutes before departure; preferred carriage numbers and seat rules (or explicitly no preference). Explain defaults
@@ -54,15 +55,18 @@ of guessing train type, time, fare, or route. Do not roast or insult the user. C
 the user's request. On Windows, `scripts/setup.ps1` is an alternative interactive questionnaire that asks the same
 questions and writes the file.
 
-Ask the user to run `scripts/save-credential.ps1` in their own local PowerShell terminal for the Le Frecce username
-and hidden password prompt. Never request the password in chat or put it in the config. The script saves a
-Windows-encrypted credential beside the config. Verify the account with `login` and `status` after setup; if sign-in
-is rejected or challenged, stop and report the exact error. Outside Windows, use the environment credential
-described in `README.md`.
+On Windows, ask the user to run `scripts/save-credential.ps1` in their own local PowerShell terminal for the Le
+Frecce username and hidden password prompt. The encrypted file belongs to that Windows user on that workstation;
+each colleague must create their own. On macOS and Linux, use `login --manual` in the plugin's dedicated browser
+profile. An environment credential is optional only when the user already provides it securely for unattended runs.
+Never request the password in chat or put it in the config. Run `doctor`, then verify with `login` and `status`.
+If sign-in fails, report the specific `error`, `session.pageMessage` and private evidence path without sharing the
+screenshot or retrying credentials in a loop.
 
 | Field | Meaning |
 |---|---|
-| `traveller.firstName`, `traveller.lastName` | passenger name, also the name the site shows in the header when signed in |
+| `traveller.firstName`, `traveller.lastName` | passenger name; `traveller.lastName` is the default account-header check |
+| `account.lastName` | optional account holder surname if the Le Frecce account belongs to someone other than the traveller; used to verify sign-in |
 | `traveller.tuttoTrenoCardNumber` | "Numero carta tutto treno", typed into the fare block of each leg |
 | `stations.<key>` | exact station names as the site lists them |
 | `legs[]` | one entry per direction: `id`, `from`, `to` (station keys), `service` (train acronym: `IC`, `FB`, `FR`…), `departAfter`/`departBefore` (`HH:mm` window), `offerName` and `offerId` (the free fare) |
@@ -85,8 +89,12 @@ Read whatever number the site shows, use it, and report it if it differs from `k
 node <skill folder>/scripts/commute.mjs status
 ```
 
-Needs Node 18+, Google Chrome and a one-time `npm install` in `scripts/` (README). In about 15 seconds it signs in
-if needed, reads the account's trips through the site's own API (no scrolling), finds the matching train for
+Needs Node 22+, Google Chrome or Microsoft Edge and a one-time `npm ci` in each installed plugin's `scripts/`
+folder (README). Run `node <skill folder>/scripts/commute.mjs doctor` first on a new workstation; it reports
+runtime, dependency, browser and config readiness without opening Le Frecce or printing credentials. Run it in
+the same agent execution context as booking; a sandbox may have a different Node or Windows credential identity
+than the user's terminal. Then `status`
+signs in if needed, reads the account's trips through the site's own API (no scrolling), finds the matching train for
 every workday and leg, and prints one JSON line (the readable table goes to stderr). It books nothing.
 
 Per row: `day`, `leg`, `state`, plus `train`/`departure` or `pnr`.
@@ -100,14 +108,16 @@ Per row: `day`, `leg`, `state`, plus `train`/`departure` or `pnr`.
 | `unknown-not-signed-in` | train found, account not readable | sign in (below), run again |
 | `search-error` | the site's search failed | run again; if it persists, use §2.2 |
 
-Exit code `2` = not signed in. Sign in yourself: run `node <skill folder>/scripts/commute.mjs login`. It opens
-Chrome on the script's own profile and signs in from the saved credential; the session is kept for later runs.
-Then run `status` again.
+Exit code `2` = the account session was not verified. Read `error`: it distinguishes a site login message, a
+different account name, a trip-list failure, and a missing local credential. `login` opens the plugin's own
+Chrome/Edge profile and uses the locally saved credential; the user's usual Chrome profile is separate. For a
+manual sign-in, run `login --manual`: it skips the saved credential and waits up to five minutes. Then run
+`status` again.
 
 - `login` finds no saved credential: ask the user once to run `scripts/save-credential.ps1` (they type username
   and password into its hidden local prompt; Windows encrypts the file for their user only), then run `login` again.
 - Credential rejected, CAPTCHA, OTP or any other challenge: stop and report the exact message. Do not retry in a
-  loop; the user can sign in by hand in the window `login` opens (it waits 5 minutes).
+  loop; the user can run `login --manual` and sign in in the plugin browser window.
 
 Exit code `1`: read `step` and `error`. If `trips.sample` is set, the trip list arrived but could not be parsed:
 report the file path, do not guess, and use §2.2 for this run.

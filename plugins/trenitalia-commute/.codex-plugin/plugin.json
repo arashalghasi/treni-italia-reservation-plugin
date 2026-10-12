@@ -1,13 +1,13 @@
 {
   "name": "trenitalia-commute",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Books free abbonamento / Carta Tutto Treno seat reservations on lefrecce.it for a daily two-leg commute described in a personal config file.",
   "keywords": ["commute", "train", "seat-reservation", "abbonamento", "playwright"],
   "skills": "./skills/",
   "interface": {
     "displayName": "Trenitalia Commute",
     "shortDescription": "Free abbonamento seat reservations on lefrecce.it",
-    "longDescription": "Reads the account's trips, finds the configured train type in each leg's time window for every workday, and books the days still missing at €0.00 only, through the site's own pages (Playwright with the installed Chrome). Personal data, the browser profile and the encrypted credential stay in ~/.trenitalia-commute; the plugin holds none.",
+    "longDescription": "Checks the workstation, reads the account's trips, finds the configured train type in each leg's time window, and books missing days at €0.00 only through the site's own pages (Playwright with installed Chrome or Edge). Personal data and the browser profile stay in ~/.trenitalia-commute; Windows credentials are encrypted for the local user.",
     "developerName": "trenitalia-commute",
     "category": "Productivity",
     "capabilities": ["Read", "Write"],
