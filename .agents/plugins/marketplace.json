@@ -1,0 +1,11 @@
+{
+  "name": "trenitalia-commute-local",
+  "plugins": [
+    {
+      "name": "trenitalia-commute",
+      "source": { "source": "local", "path": "./plugins/trenitalia-commute" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}

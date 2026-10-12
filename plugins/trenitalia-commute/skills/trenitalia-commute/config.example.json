@@ -1,0 +1,44 @@
+{
+  "traveller": {
+    "firstName": "CHANGE-ME",
+    "lastName": "CHANGE-ME",
+    "tuttoTrenoCardNumber": "CHANGE-ME"
+  },
+  "stations": {
+    "home": "CHANGE-ME-ORIGIN-STATION",
+    "work": "CHANGE-ME-DESTINATION-STATION"
+  },
+  "legs": [
+    {
+      "id": "outbound",
+      "from": "home",
+      "to": "work",
+      "service": "CHANGE-ME",
+      "departAfter": "CHANGE-ME",
+      "departBefore": "CHANGE-ME",
+      "offerName": "CHANGE-ME",
+      "offerId": "CHANGE-ME"
+    },
+    {
+      "id": "return",
+      "from": "work",
+      "to": "home",
+      "service": "CHANGE-ME",
+      "departAfter": "CHANGE-ME",
+      "departBefore": "CHANGE-ME",
+      "offerName": "CHANGE-ME",
+      "offerId": "CHANGE-ME"
+    }
+  ],
+  "seats": {
+    "carriages": [],
+    "rules": [],
+    "knownGood": []
+  },
+  "window": {
+    "workingDays": 20,
+    "weekdays": [1, 2, 3, 4, 5],
+    "extraHolidays": [],
+    "minutesBeforeDeparture": 15
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "trenitalia-commute-local",
+  "description": "Local marketplace with the trenitalia-commute plugin (free abbonamento seat reservations for a daily train commute).",
+  "owner": {
+    "name": "trenitalia-commute"
+  },
+  "plugins": [
+    {
+      "name": "trenitalia-commute",
+      "source": "./plugins/trenitalia-commute",
+      "description": "Books the commute days the account is still missing, at €0.00 only.",
+      "version": "1.0.0"
+    }
+  ]
+}

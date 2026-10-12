@@ -1,0 +1,4 @@
+interface:
+  display_name: "Trenitalia commute"
+  short_description: "Free abbonamento seat reservations on lefrecce.it"
+  default_prompt: "Use $trenitalia-commute: run status, then book the days my account is still missing at €0.00 and report the PNRs."

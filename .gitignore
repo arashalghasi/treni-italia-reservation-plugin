@@ -1,0 +1,7 @@
+node_modules/
+*.log
+config.json
+credential.xml
+browser-profile/
+runs/
+recordings/

@@ -1,0 +1,7 @@
+{
+  "name": "trenitalia-commute",
+  "version": "1.0.0",
+  "description": "Books free abbonamento / Carta Tutto Treno seat reservations for a daily two-leg train commute described in a personal config file: reads the account's trips, finds the configured train type per workday, books the missing days at €0.00 only.",
+  "keywords": ["commute", "train", "seat-reservation", "abbonamento", "playwright"],
+  "skills": "./skills/"
+}
