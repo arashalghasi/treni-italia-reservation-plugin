@@ -23,6 +23,8 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { authFailure } from './auth-diagnostics.mjs';
+import { accountTrips, tripLegs, tripMatchesLeg } from './account-trips.mjs';
+import { fillRequiredField } from './booking-fields.mjs';
 
 const SITE = 'https://www.lefrecce.it/Channels.Website.WEB/';
 const API = 'https://www.lefrecce.it/Channels.Website.BFF.WEB/website';
@@ -47,6 +49,12 @@ const minutes = (time) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5
 const clock = (total) => `${two(Math.floor(Math.max(0, total) / 60))}:${two(Math.max(0, total) % 60)}`;
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const weekdayName = (day) => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(`${day}T12:00:00`).getDay()];
+const validDay = (day) => /^\d{4}-\d{2}-\d{2}$/.test(day || '') && !Number.isNaN(Date.parse(`${day}T00:00:00Z`))
+  && new Date(`${day}T00:00:00Z`).toISOString().slice(0, 10) === day;
+const positiveCount = (value, label) => {
+  if (!/^\d+$/.test(value || '') || Number(value) < 1 || Number(value) > 366) fail('config', `${label} must be an integer from 1 to 366`);
+  return Number(value);
+};
 
 const result = { command, ok: false, step: 'config', startedAt: new Date().toISOString() };
 const fail = (step, message, exitCode = 1) => { const error = new Error(message); error.step = step; error.exitCode = exitCode; throw error; };
@@ -83,6 +91,14 @@ function readConfig() {
   if (!Array.isArray(config.window.weekdays) || !config.window.weekdays.length
     || config.window.weekdays.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) fail('config', 'window.weekdays must contain day numbers from 0 to 6');
   if (!Array.isArray(config.window.extraHolidays)) fail('config', 'window.extraHolidays must be an array');
+  if (config.window.extraHolidays.some((day) => typeof day !== 'string' || !(/^(?:\d{4}-)?\d{2}-\d{2}$/.test(day)
+    && validDay(day.length === 5 ? `2024-${day}` : day)))) fail('config', 'window.extraHolidays must contain valid YYYY-MM-DD or MM-DD dates');
+  if (!Number.isInteger(config.window.minutesBeforeDeparture) || config.window.minutesBeforeDeparture < 0 || config.window.minutesBeforeDeparture > 1440) {
+    fail('config', 'window.minutesBeforeDeparture must be an integer from 0 to 1440');
+  }
+  for (const key of ['carriages', 'rules', 'knownGood']) {
+    if (config.seats?.[key] !== undefined && !Array.isArray(config.seats[key])) fail('config', `seats.${key} must be an array`);
+  }
   return config;
 }
 
@@ -108,7 +124,11 @@ function isHoliday(day, extraHolidays) {
 function targetDays(config, fromDay, untilDay = null) {
   const days = [];
   const date = new Date(`${fromDay}T12:00:00`);
+  const lastDay = new Date(date);
+  lastDay.setDate(lastDay.getDate() + (untilDay ? 365 : 366 * 8));
+  if (untilDay && untilDay > isoDay(lastDay)) fail('config', 'date range must be no longer than 366 calendar days');
   while (untilDay ? isoDay(date) <= untilDay : days.length < config.window.workingDays) {
+    if (date > lastDay) fail('config', 'not enough eligible travel days in the configured window');
     const day = isoDay(date);
     if (config.window.weekdays.includes(date.getDay()) && !isHoliday(day, config.window.extraHolidays)) days.push(day);
     date.setDate(date.getDate() + 1);
@@ -142,9 +162,10 @@ function savedCredential() {
 
 // --- mask known personal values in recordings and diagnostic samples
 function masker(config, credential) {
-  const personal = [config.traveller.firstName, config.traveller.lastName, config.traveller.tuttoTrenoCardNumber, credential?.username, credential?.password]
+  const personal = [config.traveller.firstName, config.traveller.lastName, config.account?.lastName, config.traveller.tuttoTrenoCardNumber,
+    ...Object.values(config.stations), credential?.username, credential?.password]
     .filter((value) => value && String(value).length > 2).map((value) => String(value).toLowerCase());
-  const sensitiveKey = /pass(word)?|token|secret|cookie|e-?mail|phone|mobile|birth|fiscal|^(first|last)name$|surname|holder|cardnumber|loyaltycode|cartafreccia|tuttotreno|customerkey|pnr|booking.?reference/i;
+  const sensitiveKey = /pass(word)?|token|secret|cookie|user(name)?|e-?mail|phone|mobile|birth|fiscal|^(first|last)name$|surname|holder|cardnumber|loyaltycode|cartafreccia|tuttotreno|customerkey|pnr|booking.?reference/i;
   const mask = (value, key = '') => {
     if (Array.isArray(value)) return value.map((item) => mask(item));
     if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([childKey, child]) => [childKey, mask(child, childKey)]));
@@ -371,51 +392,13 @@ async function mapLimited(items, limit, worker) {
   return results;
 }
 
-// --- trips of the account: travel/solutions, 10 per page (the page "I miei viaggi" uses the same call)
-function toIsoDateTime(value) {
-  if (/^\d{4}-\d\d-\d\d/.test(value)) return value.slice(0, 16).replace(' ', 'T');
-  const italian = value.match(/^(\d\d)\/(\d\d)\/(\d{4})\D*(\d\d:\d\d)?/);
-  return italian ? `${italian[3]}-${italian[2]}-${italian[1]}T${italian[4] || '00:00'}` : null;
-}
-
-// --- one item per leg: station names and times in description, departureDate, pnr,
-//     typeDescription "Prenotazione Abbonamento"; any type counts as booked
-function tripLegs(items) {
-  const legs = new Map();
-  for (const item of items) {
-    const route = String(item.description || '').match(/^(.+?)\s*\((\d\d:\d\d)\)\s*-\s*(.+?)\s*\((\d\d:\d\d)\)/);
-    const departure = toIsoDateTime(String(item.departureDate || ''));
-    if (!route || !departure || /CANCEL|REFUND|ANNULL|RIMBORS/i.test(item.statusDescription || '')) continue;
-    const key = `${route[1]}|${route[3]}|${departure}`;
-    if (!legs.has(key)) legs.set(key, { origin: route[1], destination: route[3], departure, pnr: item.pnr || null, type: item.typeDescription || null });
-  }
-  return [...legs.values()];
-}
-
-async function accountTrips(api, fromDay, toDay) {
-  const items = [];
-  const answers = [];
-  for (const travelGroup of ['TICKET', 'SUBSCRIPTION']) {
-    for (let offset = 0; offset < 500; offset += 10) {
-      const response = await api('POST', '/travel/solutions', { travelGroup, searchType: 'DEPARTURE_DATE', fromDate: italianDay(fromDay), toDate: italianDay(toDay), code: null, limit: 10, offset });
-      answers.push(`${travelGroup}@${offset}:${response.status}`);
-      const page = Array.isArray(response.json?.solutions) ? response.json.solutions : null;
-      if (response.status !== 200 || !page) break;
-      items.push(...page);
-      if (page.length < 10) break;
-    }
-  }
-  return { items, answers };
-}
-
 function plan(config, days, trains, legs, now, signedIn) {
-  const stationName = (key) => config.stations[key].toLowerCase();
   return days.flatMap((day, dayIndex) => config.legs.map((leg, legIndex) => {
     const found = trains[dayIndex * config.legs.length + legIndex];
-    const booked = legs?.find((trip) => trip.departure.slice(0, 10) === day
-      && trip.origin.toLowerCase().startsWith(stationName(leg.from)) && trip.destination.toLowerCase().startsWith(stationName(leg.to)));
+    const bookings = legs?.filter((trip) => tripMatchesLeg(trip, leg, day, config)) || [];
     const entry = { day, weekday: weekdayName(day), leg: leg.id, ...found };
-    if (booked) return { ...entry, state: 'booked', pnr: booked.pnr, bookedDeparture: booked.departure.slice(11, 16) };
+    if (bookings.length > 1) return { ...entry, state: 'booking-duplicate', pnrs: bookings.map((trip) => trip.pnr) };
+    if (bookings.length) return { ...entry, state: bookings[0].pnr ? 'booked' : 'booking-unverified', pnr: bookings[0].pnr, bookedDeparture: bookings[0].departure.slice(11, 16) };
     const departureMinutes = minutes(found.departure || leg.departAfter);
     if (day === isoDay(now) && departureMinutes - config.window.minutesBeforeDeparture <= now.getHours() * 60 + now.getMinutes()) return { ...entry, state: 'departed' };
     if (found.error) return { ...entry, state: 'search-error' };
@@ -434,31 +417,34 @@ function summary(rows) {
 
 // --- trains per day and leg, the account's trips, and the state of every leg
 async function accountPlan(api, config, days, fromDay, signedIn) {
+  let legs = null;
+  if (signedIn) {
+    result.step = 'trips';
+    const trips = await accountTrips(api, fromDay, days[days.length - 1]);
+    const parsed = tripLegs(trips.items);
+    legs = parsed.legs;
+    result.trips = { answers: trips.answers, items: trips.items.length, legs: legs.length, unparsed: parsed.unparsed };
+    if (flag('debug') || parsed.unparsed) {
+      fs.mkdirSync(runsDirectory, { recursive: true });
+      const file = path.join(runsDirectory, `${stamp()}_trips-sample.json`);
+      fs.writeFileSync(file, JSON.stringify(masker(config, null)((parsed.unparsed ? parsed.unparsedItems : trips.items).slice(0, 3)), null, 2));
+      result.trips.sample = file;
+    }
+    if (parsed.unparsed) fail('trips', `${parsed.unparsed} active trip record(s) could not be parsed; existing reservations cannot be verified`);
+  }
   result.step = 'stations';
   const ids = await stationIds(api, config);
   result.step = 'trains';
   const pairs = days.flatMap((day) => config.legs.map((leg) => ({ day, leg })));
   const trains = await mapLimited(pairs, 3, ({ day, leg }) => findTrain(api, ids, leg, day));
-  let legs = null;
-  if (signedIn) {
-    result.step = 'trips';
-    const trips = await accountTrips(api, fromDay, days[days.length - 1]);
-    legs = tripLegs(trips.items);
-    result.trips = { answers: trips.answers, items: trips.items.length, legs: legs.length };
-    if (flag('debug') || (trips.items.length && !legs.length)) {
-      fs.mkdirSync(runsDirectory, { recursive: true });
-      const file = path.join(runsDirectory, `${stamp()}_trips-sample.json`);
-      fs.writeFileSync(file, JSON.stringify(masker(config, null)(trips.items.slice(0, 3)), null, 2));
-      result.trips.sample = file;
-    }
-  }
   result.step = 'plan';
   return plan(config, days, trains, legs, new Date(), signedIn);
 }
 
 async function status(config) {
   const fromDay = flagValue('from') || isoDay(new Date());
-  if (flagValue('days')) config.window.workingDays = Number(flagValue('days'));
+  if ((flag('from') && !flagValue('from')) || !validDay(fromDay)) fail('config', '--from must be a valid YYYY-MM-DD date');
+  if (flag('days')) config.window.workingDays = positiveCount(flagValue('days'), '--days');
   const days = targetDays(config, fromDay);
   result.step = 'browser';
   const { context, page, api } = await openBrowser({ headless: !flag('visible') });
@@ -609,13 +595,12 @@ async function chooseFreeFare(page, config, leg, row) {
     if (taken && (await pageTotal(page)) === '0,00') break;
     if (round === 2) fail('book', `${leg.id}: ${leg.offerName} did not give €0,00 after 3 attempts`);
   }
-  for (const [selector, value] of [
-    ['input#param-10, input[aria-label="Name"], input[aria-label="Nome"]', config.traveller.firstName],
-    ['input#param-11, input[aria-label="Surname"], input[aria-label="Cognome"]', config.traveller.lastName],
-    ['input#param-285, input[aria-label="Tutto treno card number"], input[aria-label="Numero carta tutto treno"]', config.traveller.tuttoTrenoCardNumber],
+  for (const [selector, value, label] of [
+    ['input#param-10, input[aria-label="Name"], input[aria-label="Nome"]', config.traveller.firstName, 'traveller first name'],
+    ['input#param-11, input[aria-label="Surname"], input[aria-label="Cognome"]', config.traveller.lastName, 'traveller surname'],
+    ['input#param-285, input[aria-label="Tutto treno card number"], input[aria-label="Numero carta tutto treno"]', config.traveller.tuttoTrenoCardNumber, 'Tutto Treno card number'],
   ]) {
-    const field = page.locator(selector).filter({ visible: true }).first();
-    if ((await field.count()) && !(await field.inputValue())) await field.fill(String(value));
+    await fillRequiredField(page, selector, String(value), label);
   }
   const seats = page.locator('input#switch-seat');
   if ((await seats.count()) && !(await seats.isChecked())) await seats.check({ force: true });
@@ -779,34 +764,36 @@ async function commitDay(page, api, config, prepared) {
   // --- proof from the account, not from the confirmation page; the trip list shows a new booking only after
   //     some seconds: every 5 s, at most 90 s
   let trips = [];
-  for (let attempt = 0; attempt < 18 && trips.length < config.legs.length; attempt++) {
+  let matches = [];
+  for (let attempt = 0; attempt < 18; attempt++) {
     await page.waitForTimeout(5000);
-    trips = tripLegs((await accountTrips(api, prepared.day, prepared.day)).items);
+    const parsed = tripLegs((await accountTrips(api, prepared.day, prepared.day)).items);
+    if (parsed.unparsed) fail('trips', `${parsed.unparsed} active trip record(s) could not be parsed after booking`);
+    trips = parsed.legs;
+    matches = config.legs.map((leg) => trips.filter((trip) => tripMatchesLeg(trip, leg, prepared.day, config)));
+    if (matches.every((entries) => entries.length === 1 && entries[0].pnr)) break;
   }
-  const pnrs = [...new Set(trips.map((trip) => trip.pnr))];
-  fs.appendFileSync(logFile, `- ${new Date().toTimeString().slice(0, 8)} verified ${prepared.day} in account trip list: ${trips.length} legs, PNR ${pnrs.join(', ')}\n`);
-  if (trips.length !== config.legs.length) fail('book', `${prepared.day}: account shows ${trips.length} legs after booking, expected ${config.legs.length}`);
-  return { ...prepared, pnr: pnrs.join(', '), verifiedLegs: trips.length, log: logFile };
+  const verified = matches.every((entries) => entries.length === 1 && entries[0].pnr);
+  const pnrs = [...new Set(matches.flat().map((trip) => trip.pnr).filter(Boolean))];
+  fs.appendFileSync(logFile, `- ${new Date().toTimeString().slice(0, 8)} verified ${prepared.day} in account trip list: ${verified ? config.legs.length : 0} matching legs, PNR ${pnrs.join(', ') || 'pending'}\n`);
+  if (!verified) fail('book', `${prepared.day}: the account did not show exactly one reservation with a PNR for every configured leg after booking`);
+  return { ...prepared, pnr: pnrs.join(', '), verifiedLegs: config.legs.length, log: logFile };
 }
 
 // --- node commute.mjs book --count=2 [--confirm]: without --confirm every day stops on the payment page
 //     (cart left to expire); with --confirm it accepts the conditions of carriage and confirms each day
 async function book(config) {
   // --- the days come from the account's gap; --count limits how many, default every such day in the window
-  const count = flagValue('count') ? Number(flagValue('count')) : Infinity;
+  const count = flag('count') ? positiveCount(flagValue('count'), '--count') : Infinity;
   const from = flagValue('from');
   const until = flagValue('until');
   const on = flagValue('on');
   const legId = flagValue('leg');
-  const validDay = (day) => {
-    const date = new Date(`${day}T00:00:00Z`);
-    return /^\d{4}-\d{2}-\d{2}$/.test(day) && !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === day;
-  };
-  if (from && !validDay(from)) fail('config', '--from must be a valid YYYY-MM-DD date');
-  if (until && !validDay(until)) fail('config', '--until must be a valid YYYY-MM-DD date');
-  if (on && !validDay(on)) fail('config', '--on must be a valid YYYY-MM-DD date');
+  if (flag('from') && !validDay(from)) fail('config', '--from must be a valid YYYY-MM-DD date');
+  if (flag('until') && !validDay(until)) fail('config', '--until must be a valid YYYY-MM-DD date');
+  if (flag('on') && !validDay(on)) fail('config', '--on must be a valid YYYY-MM-DD date');
   if (from && until && from > until) fail('config', '--from must not be after --until');
-  if (legId) {
+  if (flag('leg')) {
     if (!on) fail('config', '--leg requires --on=YYYY-MM-DD to identify the exact day');
     const leg = config.legs.find((entry) => entry.id === legId);
     if (!leg) fail('config', `unknown leg ${legId}`);
@@ -820,21 +807,23 @@ async function book(config) {
     result.step = 'session';
     result.session = await ensureSession(page, api, config);
     if (!result.session.signedIn) fail('session', authFailure(result.session), 2);
-    for (let done = 0; done < count; done++) {
-      // --- re-read the account before each day: never book a leg that has a PNR
-      const today = isoDay(new Date());
-      const startDay = on && on > today ? on : from && from > today ? from : today;
-      const days = targetDays(config, startDay, until).filter((day) => !on || day === on);
-      if (!days.length) { result.note = 'no working day in the selected date range'; break; }
-      const rows = await accountPlan(api, config, days, days[0], true);
-      const day = days.find((candidate) => !result.booked.some((entry) => entry.day === candidate)
-        && config.legs.every((leg) => rows.find((row) => row.day === candidate && row.leg === leg.id)?.state === 'to-book'));
-      if (!day) { result.note = 'no further day with every leg to book'; break; }
+    const today = isoDay(new Date());
+    const startDay = on && on > today ? on : from && from > today ? from : today;
+    const days = targetDays(config, startDay, until).filter((day) => !on || day === on);
+    if (!days.length) { result.note = 'no working day in the selected date range'; result.ok = true; return; }
+    const initialRows = await accountPlan(api, config, days, days[0], true);
+    const candidates = days.filter((day) => config.legs.every((leg) => initialRows.find((row) => row.day === day && row.leg === leg.id)?.state === 'to-book'));
+    for (const day of candidates) {
+      if (result.booked.length >= count) break;
+      // --- re-read only this day's account state before booking; never trust the earlier plan alone
+      const rows = await accountPlan(api, config, [day], day, true);
+      if (!config.legs.every((leg) => rows.find((row) => row.leg === leg.id)?.state === 'to-book')) continue;
       result.step = `book ${day}`;
       const prepared = await prepareDay(page, api, config, day, rows);
       if (!confirm) { result.prepared = prepared; result.note = 'stopped on the payment page (no --confirm); the cart expires by itself'; break; }
       result.booked.push(await commitDay(page, api, config, prepared));
     }
+    if (!result.booked.length && !result.prepared) result.note = 'no further day with every leg to book';
     result.ok = true;
   } catch (error) {
     await evidence(page, (error.step || result.step).replace(/\s+/g, '-'));
@@ -878,7 +867,7 @@ async function login(config) {
 
 async function record(config) {
   result.step = 'browser';
-  const mask = masker(config, savedCredential());
+  const mask = masker(config, null);
   const { context } = await openBrowser({ headless: false });
   fs.mkdirSync(path.join(home, 'recordings'), { recursive: true });
   const file = path.join(home, 'recordings', `${stamp()}.jsonl`);

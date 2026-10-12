@@ -86,6 +86,11 @@ node commute.mjs record                 # record the site's API calls while you 
 `runs/<date>_bookings.md`, and proves every booking from the trip list (PNR). A dry-run cart keeps its seats
 for about 10 minutes, so a real run right after it may get other seats.
 
+The script stops if any trip-list page fails, an active trip record cannot be parsed, a matching trip has no PNR,
+or the passenger fields do not hold the configured values. It searches the requested window once, then rechecks
+each candidate day's account state immediately before booking. A `--from`/`--until` range may span at most 366
+calendar days.
+
 ```
 YYYY-MM-DD Tue  outbound  to-book                <train> <time>
 YYYY-MM-DD Tue  return    booked                 PNR XXXXXX (<time>)

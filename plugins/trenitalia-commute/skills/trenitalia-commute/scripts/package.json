@@ -5,7 +5,7 @@
   "description": "Trenitalia commute helper: session, booked legs and matching trains per workday on lefrecce.it (playwright-core with installed Chrome or Edge)",
   "scripts": {
     "doctor": "node commute.mjs doctor",
-    "test": "node --test auth-diagnostics.test.mjs",
+    "test": "node --test auth-diagnostics.test.mjs account-trips.test.mjs booking-fields.test.mjs commute-validation.test.mjs",
     "status": "node commute.mjs status",
     "login": "node commute.mjs login",
     "record": "node commute.mjs record"

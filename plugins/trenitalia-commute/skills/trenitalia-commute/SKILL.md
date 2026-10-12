@@ -102,6 +102,8 @@ Per row: `day`, `leg`, `state`, plus `train`/`departure` or `pnr`.
 | `state` | Meaning | Action |
 |---|---|---|
 | `booked` | the account already holds this leg (`pnr`) | skip |
+| `booking-unverified` | a matching account trip has no PNR | stop; inspect the account before booking |
+| `booking-duplicate` | the account shows more than one reservation for this day and leg | stop; inspect the account |
 | `to-book` | not booked, matching train found (`train`, `departure`) | book (§4) |
 | `departed` | today, departure already passed or too close | skip, say so |
 | `no-matching-train` | no `service` train in the window; `seen` lists what runs | report, do not substitute |
@@ -119,7 +121,8 @@ manual sign-in, run `login --manual`: it skips the saved credential and waits up
 - Credential rejected, CAPTCHA, OTP or any other challenge: stop and report the exact message. Do not retry in a
   loop; the user can run `login --manual` and sign in in the plugin browser window.
 
-Exit code `1`: read `step` and `error`. If `trips.sample` is set, the trip list arrived but could not be parsed:
+Exit code `1`: read `step` and `error`. A failed trip-list page stops the run; an empty partial list is not proof
+that a leg is unbooked. If `trips.sample` is set, a trip record arrived but could not be parsed:
 report the file path, do not guess, and use §2.2 for this run.
 
 ### 2.1b Fast path: booking with the script
@@ -131,7 +134,8 @@ node <skill folder>/scripts/commute.mjs book --count=<days> --confirm  # books, 
 
 `book` does §4 by itself for the next days whose legs are all `to-book` (it re-reads the account before each
 day): search, free fare per leg (with the retry of §4.3), traveller and card data, seats (§4.4: `knownGood` first,
-then the rules), cart check through the site's cart API (both free offers present), and with `--confirm` the
+then the preferred carriages and available-seat spacing; free-text `seats.rules` guide manual booking), cart
+check through the site's cart API (both free offers present), and with `--confirm` the
 conditions of carriage, the contact modal, the success page, the run log and the proof from the trip list.
 Any total other than €0,00, a refusal (§6) or an unexpected page stops it with `step`, `error` and a screenshot
 in `evidence`.

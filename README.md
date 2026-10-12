@@ -54,8 +54,9 @@ codex plugin marketplace upgrade trenitalia-commute-local
 codex plugin add trenitalia-commute@trenitalia-commute-local
 ```
 
-Restart Claude or open a new Codex chat to load the updated skill. Version 1.0.3 adds workstation diagnostics,
-separate login failure reasons, manual sign-in that skips stored credentials, and stricter config checks.
+Restart Claude or open a new Codex chat to load the updated skill. Version 1.0.4 stops booking when the account's
+trip list is incomplete or changes format, checks prefilled passenger fields, verifies each leg's PNR after booking,
+and avoids repeating the whole train search before every day. Date ranges are limited to 366 calendar days.
 
 ## Before the first booking (on each workstation)
 
