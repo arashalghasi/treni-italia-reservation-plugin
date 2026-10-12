@@ -1,6 +1,6 @@
 ---
 name: trenitalia-commute
-description: Book free abbonamento / Carta Tutto Treno seat reservations on lefrecce.it for a daily two-leg train commute described in a personal config file (stations, service type and time window per leg, fare code, traveller, seat preferences). Use when asked to reserve, book or hold commute trains for one or more workdays, to check which commute days are already booked, or to repeat the daily reservation. Reads the account state first, books only the missing legs, matches trains by service type and time window, never pays, stops cleanly when the entitlement has lapsed, and ends every run with a report.
+description: Set up and book free abbonamento / Carta Tutto Treno seat reservations on lefrecce.it for a daily two-leg commute. Use when asked to configure the commute, check booked days, or reserve one or more workdays. On first setup, ask for the traveller, card, stations, train service and departure window for each leg, free fare identifiers, travel days and seat preferences; save them only in the private config. Read account state first, book only missing legs at €0.00, and report the result.
 ---
 
 # Trenitalia commute booking
@@ -43,12 +43,22 @@ or the path in the environment variable `TRENITALIA_COMMUTE_CONFIG`. The same fo
 profile, run logs and recordings. Nothing personal lives in the skill folder, so the skill folder can be shared
 as it is.
 
-If the file is missing on Windows: run `scripts/setup.ps1` in a local interactive PowerShell terminal.
-It asks the user for the traveller, card, stations, both train services and time windows, free offer names/IDs,
-seat preferences, and the Le Frecce username and password. The password prompt is hidden and saves a
-Windows-encrypted credential; never ask the user to type a password in chat. Verify the account with `login`
-and `status` after setup. Outside Windows, copy `config.example.json` and ask for its required values, then
-use the environment credential described in `README.md`.
+On first use, if the config is missing, ask the user for **every value needed to build it**. Group the questions so
+they can answer in one reply: traveller first and last name and Tutto Treno card number; exact home and work station
+names; for **each direction**, train service code, earliest and latest departure (`HH:mm`), and exact free offer
+name and numeric ID; travel weekdays, extra no-travel dates, and how many working days to check ahead; minimum
+minutes before departure; preferred carriage numbers and seat rules (or explicitly no preference). Explain defaults
+from `config.example.json` for optional values. Ask follow-up questions for missing or inconsistent answers instead
+of guessing train type, time, fare, or route. Do not roast or insult the user. Create the config from
+`config.example.json` in the private location above, validate it, and do not overwrite an existing config without
+the user's request. On Windows, `scripts/setup.ps1` is an alternative interactive questionnaire that asks the same
+questions and writes the file.
+
+Ask the user to run `scripts/save-credential.ps1` in their own local PowerShell terminal for the Le Frecce username
+and hidden password prompt. Never request the password in chat or put it in the config. The script saves a
+Windows-encrypted credential beside the config. Verify the account with `login` and `status` after setup; if sign-in
+is rejected or challenged, stop and report the exact error. Outside Windows, use the environment credential
+described in `README.md`.
 
 | Field | Meaning |
 |---|---|
@@ -119,8 +129,8 @@ in `evidence`.
 1. **Do not ask which days.** The days come from the account: `book` takes the next days whose legs are all
    `to-book`, in order. A request to book ("book my commute", "reserve two days") is the user's authorisation
    for those days, including the conditions of carriage; a number in the request is `--count`, otherwise book
-   every such day in the window. Use `--until=YYYY-MM-DD` when the request has an end date, so no later day
-   can enter the booking loop. So run `--confirm` directly.
+   every such day in the window. Use `--from=YYYY-MM-DD` and `--until=YYYY-MM-DD` when the request names a date
+   range, so no day outside it enters the booking loop. So run `--confirm` directly.
 2. Use the dry run (no `--confirm`) only when the user asks to see or test without booking.
 3. Report `booked[]`: day, trains, seats, `pnr`, `verifiedLegs`.
 

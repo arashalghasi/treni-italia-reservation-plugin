@@ -1,7 +1,8 @@
 # trenitalia-commute
 
-For a colleague who commutes by train on an abbonamento / Carta Tutto Treno and wants Claude to book the free
-daily seat reservations on lefrecce.it.
+For a colleague who commutes by train on an abbonamento / Carta Tutto Treno and wants Claude or Codex to book
+the free daily seat reservations on lefrecce.it. See the [repository README](../../../../README.md) for
+Claude Code, Claude Desktop and Codex Desktop installation commands.
 
 The skill holds the procedure; your personal data lives in one config file in your home folder. The folder you
 received contains nothing personal, so you can pass it on as it is.
@@ -24,17 +25,19 @@ Personal state, all in `~/.trenitalia-commute/` (Windows: `%USERPROFILE%\.trenit
 ## Setup (once)
 
 1. Node 18 or newer (`node -v`) and Google Chrome.
-2. Install the script dependency:
+2. In the **installed plugin's** script folder, install the dependency:
 
    ```powershell
-   cd <skill folder>\scripts
-   npm install
+   Set-Location -LiteralPath "<installed skill folder>\scripts"
+   npm ci
    ```
 
-3. Run first-time setup in a local interactive PowerShell terminal. It asks for the traveller, card, stations,
-   both train services and time windows, the exact free fare names and IDs, preferred carriages, and the
-   Le Frecce username and password. The password prompt is hidden. Config and the Windows-encrypted credential
-   are saved under `%USERPROFILE%\.trenitalia-commute`, outside the plugin and Git repository.
+3. Ask the skill to set up your commute. It asks for the traveller, card, stations, both train services and time
+   windows, exact free fare names and IDs, travel days, and seat preferences, then writes the private config. For
+   the Le Frecce sign-in, it directs you to a local hidden credential prompt. Alternatively, run the complete
+   questionnaire in your own PowerShell terminal; it asks all of these questions and the hidden sign-in prompt.
+   Config and the Windows-encrypted credential are saved under `%USERPROFILE%\.trenitalia-commute`, outside the
+   plugin and Git repository.
 
    ```powershell
    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<skill folder>\scripts\setup.ps1"
@@ -62,6 +65,7 @@ node commute.mjs status --from=YYYY-MM-DD
 node commute.mjs status --visible       # with a Chrome window, to watch
 node commute.mjs book --confirm         # book every day the account still misses (both legs), €0,00 only
 node commute.mjs book --count=2 --confirm   # only the next two such days
+node commute.mjs book --from=2030-06-01 --until=2030-06-10 --confirm  # only missing days in this range
 node commute.mjs book --until=2030-06-30 --confirm  # never book after this date
 node commute.mjs book --on=2030-06-12 --leg=outbound --count=1 --confirm  # one specified missing leg
 node commute.mjs book --count=1         # dry run: stops on the payment page, books nothing
@@ -80,11 +84,11 @@ YYYY-MM-DD Tue  return    booked                 PNR XXXXXX (<time>)
 YYYY-MM-DD Fri  return    no-matching-train      <other trains in the window>
 ```
 
-## Using it with Claude
+## Using it with Claude or Codex
 
-- **Claude Code / desktop app:** copy the folder to `~/.claude/skills/trenitalia-commute/` and ask *"book my
-  commute"* or *"reserve two days"*. Claude runs `book --confirm` (with `--count` when you name a number) and
-  reports the booked days with their PNRs.
+- **Claude Code / Claude Desktop Code / Codex Desktop:** install the plugin as shown in the
+  [repository README](../../../../README.md), then ask *"Set up my commute"* on first use or name the dates
+  you want to reserve later. The skill checks the account before booking and reports the booked PNRs.
 - **claude.ai skills:** zip the folder without `scripts/node_modules` and upload it. In a sandbox without Node
   and Chrome the script cannot run; Claude then reads the account in the browser (`SKILL.md` §2.2).
 

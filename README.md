@@ -21,36 +21,50 @@ operator may suspend or revoke access.
 | `plugins/trenitalia-commute/skills/trenitalia-commute/agents/openai.yaml` | Codex-only display name and default prompt |
 | `sync-from-claude-skill.ps1` | copies a standalone copy of the skill folder in again after it changes |
 
-## Install in Claude Code
+## Install in Claude Code or Claude Desktop Code
 
 ```powershell
-claude plugin marketplace add "<plugin folder>"
+claude plugin marketplace add arashalghasi/treni-italia-reservation-plugin
 claude plugin install trenitalia-commute@trenitalia-commute-local
 ```
 
-Then ask in a new session: *"book my commute"* or *"reserve the next two days"*.
+Start a new Claude Code session (or a new Code session in Claude Desktop), then ask:
+*"Set up my Trenitalia commute."* Claude will ask for the required trip details.
 
-## Install in Codex
+## Install in Codex Desktop
 
 ```powershell
-codex plugin marketplace add "<plugin folder>"
+codex plugin marketplace add arashalghasi/treni-italia-reservation-plugin
 codex plugin add trenitalia-commute@trenitalia-commute-local
 ```
 
-Then ask in a new session: *"Use $trenitalia-commute to book the commute days my account is still missing."*
-`commute.mjs` starts Chrome and needs network access: approve the command when Codex asks.
+In Codex Desktop, open a new chat and ask: *"Use $trenitalia-commute to set up my commute."* You can also
+find the plugin under **Plugins** after adding the marketplace. Later ask for the specific dates to reserve.
+`commute.mjs` starts Chrome and needs network access; approve the command when Codex asks.
 
 ## Before the first booking (once per machine, both tools share it)
 
-1. `npm install` in `plugins/trenitalia-commute/skills/trenitalia-commute/scripts/` (`playwright-core`, drives the
-   Chrome already installed; no browser download).
-2. Personal config: copy `config.example.json` to `~/.trenitalia-commute/config.json` and fill the `CHANGE-ME`
-   values.
-3. Credential for automatic sign-in, typed by you into the prompt (Windows, encrypted for your user only):
-   `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<skill folder>/scripts/save-credential.ps1"`.
+1. Install Node.js 18+ with npm and Google Chrome. In the **installed plugin's**
+   `skills/trenitalia-commute/scripts/` folder, run `npm ci` to install `playwright-core`. The installed folder
+   is under `%USERPROFILE%\.codex\plugins\cache\trenitalia-commute-local\trenitalia-commute\<version>\` for Codex,
+   or `%USERPROFILE%\.claude\plugins\cache\trenitalia-commute-local\trenitalia-commute\<version>\` for Claude.
+   Installing dependencies only in a source checkout does not install them in the plugin cache.
+2. Ask the skill to set up your commute. It asks for the traveller and card, exact stations, service and departure
+   window for each direction, free offer names and IDs, travel days, holidays, and seat preferences. It writes
+   `config.json` in `%USERPROFILE%\.trenitalia-commute\`, outside the plugin. You can instead run
+   `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<installed skill folder>\scripts\setup.ps1"` in your
+   own terminal; it asks the same questions. Do not put personal values in this repository.
+3. Save your Le Frecce sign-in through the local hidden prompt:
+   `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<installed skill folder>\scripts\save-credential.ps1" -Folder "$env:USERPROFILE\.trenitalia-commute"`.
+   The script prints the destination path. Verify that it is the same folder as `config.json`, then run
+   `node "<installed skill folder>\scripts\commute.mjs" login` and `status`. If sign-in is rejected or challenged,
+   stop and resolve that before booking.
 
 Personal data, the credential, the browser profile and the run logs live only in `~/.trenitalia-commute/`,
 never in this folder.
+
+Installation commands follow the [Claude plugin guide](https://code.claude.com/docs/en/plugins) and the
+[Codex plugin guide](https://developers.openai.com/plugins/build/plugins).
 
 ## After changing the skill
 

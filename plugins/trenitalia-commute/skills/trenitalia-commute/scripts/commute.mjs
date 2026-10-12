@@ -2,7 +2,7 @@
 //
 //   node commute.mjs status [--days=20] [--from=YYYY-MM-DD] [--visible] [--debug]
 //       Read-only plan: session, legs already booked, matching train per workday, legs still to book.
-//   node commute.mjs book [--count=N] [--until=YYYY-MM-DD] [--on=YYYY-MM-DD --leg=ID] [--confirm] [--headless]
+//   node commute.mjs book [--count=N] [--from=YYYY-MM-DD] [--until=YYYY-MM-DD] [--on=YYYY-MM-DD --leg=ID] [--confirm] [--headless]
 //       Books the days the account still misses (every leg to book), in order, at €0,00 only; all of them in the
 //       window unless --count limits the number.
 //       Without --confirm it stops on the payment page; --confirm accepts the conditions of carriage.
@@ -79,10 +79,10 @@ function isHoliday(day, extraHolidays) {
   return fixed.includes(monthDay) || day === isoDay(easterMonday) || extraHolidays.includes(day) || extraHolidays.includes(monthDay);
 }
 
-function targetDays(config, fromDay) {
+function targetDays(config, fromDay, untilDay = null) {
   const days = [];
   const date = new Date(`${fromDay}T12:00:00`);
-  while (days.length < config.window.workingDays) {
+  while (untilDay ? isoDay(date) <= untilDay : days.length < config.window.workingDays) {
     const day = isoDay(date);
     if (config.window.weekdays.includes(date.getDay()) && !isHoliday(day, config.window.extraHolidays)) days.push(day);
     date.setDate(date.getDate() + 1);
@@ -680,6 +680,7 @@ async function commitDay(page, api, config, prepared) {
 async function book(config) {
   // --- the days come from the account's gap; --count limits how many, default every such day in the window
   const count = flagValue('count') ? Number(flagValue('count')) : Infinity;
+  const from = flagValue('from');
   const until = flagValue('until');
   const on = flagValue('on');
   const legId = flagValue('leg');
@@ -687,8 +688,10 @@ async function book(config) {
     const date = new Date(`${day}T00:00:00Z`);
     return /^\d{4}-\d{2}-\d{2}$/.test(day) && !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === day;
   };
+  if (from && !validDay(from)) fail('config', '--from must be a valid YYYY-MM-DD date');
   if (until && !validDay(until)) fail('config', '--until must be a valid YYYY-MM-DD date');
   if (on && !validDay(on)) fail('config', '--on must be a valid YYYY-MM-DD date');
+  if (from && until && from > until) fail('config', '--from must not be after --until');
   if (legId) {
     if (!on) fail('config', '--leg requires --on=YYYY-MM-DD to identify the exact day');
     const leg = config.legs.find((entry) => entry.id === legId);
@@ -705,7 +708,9 @@ async function book(config) {
     if (!result.session.signedIn) fail('session', `not signed in (${result.session.how})`, 2);
     for (let done = 0; done < count; done++) {
       // --- re-read the account before each day: never book a leg that has a PNR
-      const days = targetDays(config, isoDay(new Date())).filter((day) => (!until || day <= until) && (!on || day === on));
+      const today = isoDay(new Date());
+      const startDay = on && on > today ? on : from && from > today ? from : today;
+      const days = targetDays(config, startDay, until).filter((day) => !on || day === on);
       if (!days.length) { result.note = 'no working day in the selected date range'; break; }
       const rows = await accountPlan(api, config, days, days[0], true);
       const day = days.find((candidate) => !result.booked.some((entry) => entry.day === candidate)

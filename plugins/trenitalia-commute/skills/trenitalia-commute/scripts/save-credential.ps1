@@ -11,4 +11,4 @@ if (-not $username -or $username -match '\\') { throw 'Not a lefrecce.it usernam
 $password = Read-Host 'lefrecce.it password (hidden)' -AsSecureString
 if ($password.Length -eq 0) { throw 'Empty password, nothing saved.' }
 New-Object System.Management.Automation.PSCredential($username, $password) | Export-Clixml -LiteralPath $file
-Write-Host 'Credential saved.'
+Write-Host "Credential saved at $file."
