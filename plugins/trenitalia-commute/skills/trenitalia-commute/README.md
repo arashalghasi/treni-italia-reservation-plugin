@@ -50,6 +50,7 @@ Personal state, all in `~/.trenitalia-commute/` (Windows: `%USERPROFILE%\.trenit
 4. Run `doctor` to check the local runtime, then verify sign-in. A browser window opens on the script's own
    profile; the session is kept for later runs. Each Windows user on each computer must save their own credential.
    A credential XML file copied from another computer cannot be decrypted.
+   `doctor.runtimeReady` does not test whether Le Frecce accepts authentication from this network.
 
    ```powershell
    node "<skill folder>\scripts\commute.mjs" doctor
@@ -77,6 +78,7 @@ node commute.mjs book --until=2030-06-30 --confirm  # never book after this date
 node commute.mjs book --on=2030-06-12 --leg=outbound --count=1 --confirm  # one specified missing leg
 node commute.mjs book --count=1         # dry run: stops on the payment page, books nothing
 node commute.mjs login                  # sign in from the local saved credential
+node commute.mjs login --headless       # automatic sign-in without a graphical desktop
 node commute.mjs login --manual         # skip saved credential; wait for local browser sign-in
 node commute.mjs record                 # record the site's API calls while you book one day by hand
 ```
@@ -90,6 +92,14 @@ The script stops if any trip-list page fails, an active trip record cannot be pa
 or the passenger fields do not hold the configured values. It searches the requested window once, then rechecks
 each candidate day's account state immediately before booking. A `--from`/`--until` range may span at most 366
 calendar days.
+
+`login` records only the authentication request's HTTP status, MIME type and error category. An HTTP 403 HTML
+Access Denied response is reported as `site-access-blocked`, even if the login page says “Incorrect username or
+password”; the credentials were not verified. An explicit structured API error is required before the plugin calls
+them rejected. A cloud network can be blocked while public search works. Run on your own computer/network and use
+`login --manual` in the plugin's visible, dedicated profile. Manual login needs `DISPLAY` or `WAYLAND_DISPLAY` on
+Linux; automatic `login --headless` needs no graphical session but does not bypass a site block. Do not rotate IPs,
+use proxies, bypass CAPTCHA, or copy cookies to get around a block.
 
 ```
 YYYY-MM-DD Tue  outbound  to-book                <train> <time>

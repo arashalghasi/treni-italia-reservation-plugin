@@ -6,9 +6,9 @@
 //       Books the days the account still misses (every leg to book), in order, at €0,00 only; all of them in the
 //       window unless --count limits the number.
 //       Without --confirm it stops on the payment page; --confirm accepts the conditions of carriage.
-//   node commute.mjs login [--manual]
-//       Visible Chrome/Edge on the dedicated profile: signs in from the saved credential (save-credential.ps1);
-//       --manual skips the saved credential and waits (at most 5 minutes) for you to sign in by hand.
+//   node commute.mjs login [--headless | --manual]
+//       Signs in from the saved credential in the dedicated profile; --headless needs no graphical session.
+//       --manual opens a visible browser, skips the credential, and waits up to 5 minutes for local sign-in.
 //   node commute.mjs doctor
 //       Check Node, the installed Playwright dependency, browser launch, config and credential availability.
 //   node commute.mjs record
@@ -22,7 +22,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { authFailure } from './auth-diagnostics.mjs';
+import { authFailure, captureAuthResponse, loginBrowserOptions } from './auth-diagnostics.mjs';
 import { accountTrips, tripLegs, tripMatchesLeg } from './account-trips.mjs';
 import { fillRequiredField } from './booking-fields.mjs';
 
@@ -256,6 +256,9 @@ async function openBrowser({ headless }) {
   let context;
   try { context = await chromium.launchPersistentContext(profileDirectory, options); }
   catch (error) {
+    if (!headless && /Missing X server|DISPLAY|X server/i.test(String(error.message))) {
+      fail('browser', 'A visible plugin browser needs a graphical session (DISPLAY or X server); use login --headless only for automatic sign-in, or run login --manual on your computer');
+    }
     fail('browser', `The selected browser could not open the plugin profile: ${String(error.message).split('\n')[0]}. Run doctor; close another plugin browser using this profile, or select Chrome/Edge with TRENITALIA_BROWSER_CHANNEL`);
   }
   // --- pages load in 1-5 s and elements appear at once: navigation at most 20 s, every other step at most 10 s
@@ -331,17 +334,16 @@ async function signIn(page, api, config, credential) {
   if (!(await usernameField.isEditable())) return session(page, api, config);
   await usernameField.fill(credential.username);
   await page.locator('#password:visible').first().fill(credential.password);
-  await page.getByRole('button', { name: /^\s*(LOG IN|ACCEDI)\s*$/i }).first().click();
-  // --- the site signs in within about 5 s: check for at most 15 s, then keep the evidence
+  const auth = await captureAuthResponse(page,
+    () => page.getByRole('button', { name: /^\s*(LOG IN|ACCEDI)\s*$/i }).first().click());
+  if (auth.error) return { ...await session(page, api, config), auth };
+  // --- the site signs in within about 5 s: check for at most 15 s after the auth response
   for (let attempt = 0; attempt < 5; attempt++) {
     await wait(3000);
     const state = await session(page, api, config);
-    if (state.signedIn) return state;
+    if (state.signedIn) return { ...state, auth };
   }
-  await evidence(page, 'sign-in');
-  const message = await page.evaluate(() => [...document.querySelectorAll('.alert, .error, .invalid-feedback, [role=alert], .modal.show')]
-    .map((element) => element.innerText.trim()).filter(Boolean).join(' | ').slice(0, 200)).catch(() => '');
-  return { ...await session(page, api, config), pageMessage: message || null };
+  return { ...await session(page, api, config), auth };
 }
 
 async function ensureSession(page, api, config) {
@@ -826,7 +828,7 @@ async function book(config) {
     if (!result.booked.length && !result.prepared) result.note = 'no further day with every leg to book';
     result.ok = true;
   } catch (error) {
-    await evidence(page, (error.step || result.step).replace(/\s+/g, '-'));
+    if (error.exitCode !== 2) await evidence(page, (error.step || result.step).replace(/\s+/g, '-'));
     throw error;
   } finally {
     await context.close().catch(() => {});
@@ -835,12 +837,14 @@ async function book(config) {
 
 async function login(config) {
   result.step = 'browser';
-  const { context, page, api } = await openBrowser({ headless: false });
+  const manual = !!flag('manual');
+  const browser = loginBrowserOptions({ manual, headless: !!flag('headless') });
+  const { context, page, api } = await openBrowser(browser);
   try {
     result.step = 'session';
     let state = await session(page, api, config);
     if (!state.signedIn) {
-      if (flag('manual')) {
+      if (manual) {
         await page.goto(`${SITE}#/login`, { waitUntil: 'load' });
         process.stderr.write('Sign in in the plugin browser window (at most 5 minutes)...\n');
         for (let attempt = 0; attempt < 100 && !state.signedIn; attempt++) {
@@ -857,9 +861,6 @@ async function login(config) {
     result.session = state;
     if (!state.signedIn) fail('session', authFailure(state), 2);
     result.ok = true;
-  } catch (error) {
-    await evidence(page, error.step || result.step);
-    throw error;
   } finally {
     await context.close().catch(() => {});
   }

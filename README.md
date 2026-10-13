@@ -54,9 +54,9 @@ codex plugin marketplace upgrade trenitalia-commute-local
 codex plugin add trenitalia-commute@trenitalia-commute-local
 ```
 
-Restart Claude or open a new Codex chat to load the updated skill. Version 1.0.4 stops booking when the account's
-trip list is incomplete or changes format, checks prefilled passenger fields, verifies each leg's PNR after booking,
-and avoids repeating the whole train search before every day. Date ranges are limited to 366 calendar days.
+Restart Claude or open a new Codex chat to load the updated skill. Version 1.0.5 identifies an HTTP 403 HTML
+Access Denied response from the actual login request, separates it from credential errors, and supports
+`login --headless` for automatic sign-in without a graphical desktop.
 
 ## Before the first booking (on each workstation)
 
@@ -76,7 +76,8 @@ and avoids repeating the whole train search before every day. Date ranges are li
 3. Run `node "<installed skill folder>\scripts\commute.mjs" doctor` (on macOS/Linux, use `/` path separators).
    It checks Node, Playwright, browser launch and config without visiting Le Frecce or printing credentials.
    Run it in the same execution context that will run bookings: a sandboxed agent can see a different Node version
-   or Windows credential identity from your own terminal. `doctor.runtimeReady` covers the program setup;
+   or Windows credential identity from your own terminal. `doctor.runtimeReady` covers only the local program
+   setup; it does not test whether Le Frecce will accept authentication from that environment.
    `doctor.credentialUsable` checks whether this process can decrypt a saved Windows credential.
    Set `TRENITALIA_BROWSER_CHANNEL=msedge` to use Edge, or `CHROME_PATH` to select a custom Chromium executable.
 4. Sign in **on this workstation**:
@@ -87,14 +88,22 @@ and avoids repeating the whole train search before every day. Date ranges are li
      in the browser window the plugin opens. This skips the saved credential. The plugin uses a dedicated browser
      profile, so being signed in in your everyday Chrome window does not sign in the plugin. The session persists
      until Le Frecce expires it; sign in manually again when needed.
-5. Run `status` before booking. If it reports a site login error, account mismatch or unreadable trip list, stop
-   and resolve that specific error. Do not retry a rejected password in a loop.
+5. Run `status` before booking. If it reports a site access block, explicit credential rejection, challenge,
+   network failure, account mismatch or unreadable trip list, stop and resolve that specific error. Do not retry
+   a rejected or unverified password in a loop.
 
 On macOS/Linux, manual sign-in remains usable only while that browser session is valid. An unattended weekly run
 will stop if Le Frecce expires it. For unattended sign-in on those systems, supply both `TRENITALIA_USERNAME` and
 `TRENITALIA_PASSWORD` through a secure process environment; the plugin does not provide a macOS/Linux keychain
 integration. A workstation's browser policy can also prevent automation even when ordinary browsing works;
 `doctor` reports browser launch separately from website login.
+
+A cloud network may receive an HTML Access Denied response from the site's edge on the login request even when
+public train search and free-fare selection work. This does not verify or disprove the credentials. Run the plugin
+on your own computer and network, then use `login --manual` in its visible, dedicated browser profile. The usual
+browser, the plugin profile and a cloud environment have separate sessions. On a Linux host without `DISPLAY` or
+`WAYLAND_DISPLAY`, `login --manual` cannot open; `login --headless` supports automatic sign-in but cannot remove
+a site access block. Do not use proxy or IP changes, CAPTCHA workarounds or copied browser cookies to bypass it.
 
 Personal data, the credential, the browser profile and the run logs live only in `~/.trenitalia-commute/`,
 never in this folder.

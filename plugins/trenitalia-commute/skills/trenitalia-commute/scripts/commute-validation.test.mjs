@@ -54,3 +54,10 @@ test('an invalid recurring holiday is rejected before a booking can be planned',
   assert.equal(output.code, 1);
   assert.match(output.result.error, /extraHolidays must contain valid/);
 });
+
+test('manual and headless login flags conflict before the browser is opened', () => {
+  const output = run('login', ['--manual', '--headless']);
+  assert.equal(output.code, 1);
+  assert.equal(output.result.step, 'browser');
+  assert.match(output.result.error, /remove --headless/);
+});

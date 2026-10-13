@@ -60,8 +60,8 @@ Frecce username and hidden password prompt. The encrypted file belongs to that W
 each colleague must create their own. On macOS and Linux, use `login --manual` in the plugin's dedicated browser
 profile. An environment credential is optional only when the user already provides it securely for unattended runs.
 Never request the password in chat or put it in the config. Run `doctor`, then verify with `login` and `status`.
-If sign-in fails, report the specific `error`, `session.pageMessage` and private evidence path without sharing the
-screenshot or retrying credentials in a loop.
+If sign-in fails, report `error` and the safe `session.auth` fields (status, content type, error category). Never
+repeat the credential or a raw response body, and do not retry credentials in a loop.
 
 | Field | Meaning |
 |---|---|
@@ -91,7 +91,8 @@ node <skill folder>/scripts/commute.mjs status
 
 Needs Node 22+, Google Chrome or Microsoft Edge and a one-time `npm ci` in each installed plugin's `scripts/`
 folder (README). Run `node <skill folder>/scripts/commute.mjs doctor` first on a new workstation; it reports
-runtime, dependency, browser and config readiness without opening Le Frecce or printing credentials. Run it in
+runtime, dependency, browser and config readiness without opening Le Frecce or printing credentials.
+`doctor.runtimeReady` says nothing about whether Le Frecce will accept login from the network. Run it in
 the same agent execution context as booking; a sandbox may have a different Node or Windows credential identity
 than the user's terminal. Then `status`
 signs in if needed, reads the account's trips through the site's own API (no scrolling), finds the matching train for
@@ -110,16 +111,20 @@ Per row: `day`, `leg`, `state`, plus `train`/`departure` or `pnr`.
 | `unknown-not-signed-in` | train found, account not readable | sign in (below), run again |
 | `search-error` | the site's search failed | run again; if it persists, use §2.2 |
 
-Exit code `2` = the account session was not verified. Read `error`: it distinguishes a site login message, a
-different account name, a trip-list failure, and a missing local credential. `login` opens the plugin's own
-Chrome/Edge profile and uses the locally saved credential; the user's usual Chrome profile is separate. For a
-manual sign-in, run `login --manual`: it skips the saved credential and waits up to five minutes. Then run
-`status` again.
+Exit code `2` = the account session was not verified. Read `error` and `session.auth`: they distinguish an edge
+access block, explicit credential rejection, challenge, network failure, account mismatch and trip-list failure.
+The website's generic login-page message alone does not prove that a password is wrong. `login` uses the plugin's
+own Chrome/Edge profile; the user's usual browser profile is separate. Automatic `login --headless` works without
+a graphical desktop, but cannot fix an HTTP 403 Access Denied response. Manual `login --manual` opens a visible
+plugin browser, skips the saved credential and waits up to five minutes; on Linux it needs a graphical session.
+Use it on the user's computer/network, then run `status` to verify the account. Public train search working in a
+cloud environment does not establish that sign-in is allowed there. Do not suggest proxy or IP rotation, CAPTCHA
+bypass, or copying browser cookies.
 
 - `login` finds no saved credential: ask the user once to run `scripts/save-credential.ps1` (they type username
   and password into its hidden local prompt; Windows encrypts the file for their user only), then run `login` again.
-- Credential rejected, CAPTCHA, OTP or any other challenge: stop and report the exact message. Do not retry in a
-  loop; the user can run `login --manual` and sign in in the plugin browser window.
+- HTTP 403 `site-access-blocked`, explicit credential rejection, CAPTCHA, OTP or another challenge: stop and
+  report the classified result. Do not retry in a loop; the user can run `login --manual` on their computer.
 
 Exit code `1`: read `step` and `error`. A failed trip-list page stops the run; an empty partial list is not proof
 that a leg is unbooked. If `trips.sample` is set, a trip record arrived but could not be parsed:
