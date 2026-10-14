@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { authFailure, captureAuthResponse, classifyAuthResponse, loginBrowserOptions } from './auth-diagnostics.mjs';
+import { authFailure, captureAuthResponse, classifyAuthResponse, loginBrowserOptions, waitForManualSignIn } from './auth-diagnostics.mjs';
 
 const loginRequest = { method: () => 'POST', url: () => 'https://www.lefrecce.it/PicoAuth/api/auth/login' };
 
@@ -22,6 +22,49 @@ test('a 403 HTML edge block overrides the misleading login page message without 
     'Le Frecce blocked sign-in from this environment (HTTP 403 Access Denied); credentials were not verified');
   assert.doesNotMatch(JSON.stringify(auth), /synthetic-password|token|errors\.edgesuite/);
   assert.equal(page.listenerCount('response'), 0);
+});
+
+test('manual browser submission is observed after the login page opens', async () => {
+  const page = new EventEmitter();
+  const auth = await captureAuthResponse(page, async () => {
+    assert.equal(page.listenerCount('response'), 1);
+    setTimeout(() => page.emit('response', {
+      request: () => loginRequest,
+      status: () => 200,
+      headers: () => ({ 'content-type': 'application/json' }),
+      text: async () => '{"token":"synthetic-token"}',
+    }), 5);
+  }, 100);
+  assert.deepEqual(auth, { status: 200, contentType: 'application/json', error: null });
+  assert.doesNotMatch(JSON.stringify(auth), /synthetic-token/);
+});
+
+test('manual sign-in verifies the account before continuing', async () => {
+  const page = new EventEmitter();
+  let checks = 0;
+  const state = await waitForManualSignIn(page, async () => {
+    setTimeout(() => page.emit('response', {
+      request: () => loginRequest, status: () => 200,
+      headers: () => ({ 'content-type': 'application/json' }), text: async () => '{}',
+    }), 1);
+  }, async () => ({ signedIn: ++checks > 1, tripsReadable: checks > 1 }), 100, 1);
+  assert.equal(checks, 2);
+  assert.equal(state.signedIn, true);
+  assert.equal(state.tripsReadable, true);
+  assert.equal(state.how, 'manual browser sign-in');
+});
+
+test('manual sign-in stops after an HTML edge block', async () => {
+  const page = new EventEmitter();
+  let checks = 0;
+  const state = await waitForManualSignIn(page, async () => {
+    page.emit('response', {
+      request: () => loginRequest, status: () => 403,
+      headers: () => ({ 'content-type': 'text/html' }), text: async () => '<title>Access Denied</title>',
+    });
+  }, async () => { checks++; return { signedIn: false }; }, 100, 1);
+  assert.equal(checks, 1);
+  assert.equal(state.auth.error, 'site-access-blocked');
 });
 
 test('only an explicit structured credential error is called a credential rejection', () => {
@@ -51,11 +94,10 @@ test('a failed login request and a missing response have separate safe diagnoses
   assert.match(authFailure({ auth: missing }), /No Le Frecce authentication response/);
 });
 
-test('headless automatic login works without DISPLAY; manual login requires a graphical session', () => {
-  assert.deepEqual(loginBrowserOptions({ headless: true, platform: 'linux', display: '', waylandDisplay: '' }), { headless: true });
-  assert.deepEqual(loginBrowserOptions({ manual: true, platform: 'linux', display: ':0' }), { headless: false });
-  assert.throws(() => loginBrowserOptions({ manual: true, platform: 'linux', display: '', waylandDisplay: '' }), /DISPLAY/);
-  assert.throws(() => loginBrowserOptions({ manual: true, headless: true, platform: 'linux', display: ':0' }), /remove --headless/);
+test('login requires a visible graphical browser', () => {
+  assert.deepEqual(loginBrowserOptions({ platform: 'linux', display: ':0' }), { headless: false });
+  assert.throws(() => loginBrowserOptions({ platform: 'linux', display: '', waylandDisplay: '' }), /DISPLAY/);
+  assert.throws(() => loginBrowserOptions({ headless: true, platform: 'linux', display: ':0' }), /remove --headless/);
 });
 
 test('a signed-in but different account is not called a bad password', () => {
@@ -71,6 +113,6 @@ test('page text alone does not prove bad credentials or repeat arbitrary page co
     'Le Frecce login page showed an error; the authentication API did not verify bad credentials');
 });
 
-test('missing local credential gives a portable manual path', () => {
-  assert.match(authFailure({ how: 'no saved credential' }), /login --manual/);
+test('a headless run without a verified session directs the user to visible login', () => {
+  assert.match(authFailure({ how: 'manual sign-in required' }), /run login in a visible browser/);
 });

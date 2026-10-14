@@ -1,16 +1,15 @@
 // Trenitalia commute helper for lefrecce.it, driven by the personal config file (no personal data in this file).
 //
-//   node commute.mjs status [--days=20] [--from=YYYY-MM-DD] [--visible] [--debug]
+//   node commute.mjs status [--days=20] [--from=YYYY-MM-DD] [--headless] [--debug]
 //       Read-only plan: session, legs already booked, matching train per workday, legs still to book.
 //   node commute.mjs book [--count=N] [--from=YYYY-MM-DD] [--until=YYYY-MM-DD] [--on=YYYY-MM-DD --leg=ID] [--confirm] [--headless]
 //       Books the days the account still misses (every leg to book), in order, at €0,00 only; all of them in the
 //       window unless --count limits the number.
 //       Without --confirm it stops on the payment page; --confirm accepts the conditions of carriage.
-//   node commute.mjs login [--headless | --manual]
-//       Signs in from the saved credential in the dedicated profile; --headless needs no graphical session.
-//       --manual opens a visible browser, skips the credential, and waits up to 5 minutes for local sign-in.
+//   node commute.mjs login [--manual]
+//       Opens the dedicated visible browser and waits up to 5 minutes for the user to sign in.
 //   node commute.mjs doctor
-//       Check Node, the installed Playwright dependency, browser launch, config and credential availability.
+//       Check Node, the installed Playwright dependency, browser launch and config.
 //   node commute.mjs record
 //       Visible plugin browser that records the site's API calls (personal values masked) while you book one day by hand.
 //
@@ -20,9 +19,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { authFailure, captureAuthResponse, loginBrowserOptions } from './auth-diagnostics.mjs';
+import { authFailure, loginBrowserOptions, waitForManualSignIn } from './auth-diagnostics.mjs';
 import { accountTrips, tripLegs, tripMatchesLeg } from './account-trips.mjs';
 import { fillRequiredField } from './booking-fields.mjs';
 
@@ -136,34 +134,10 @@ function targetDays(config, fromDay, untilDay = null) {
   return days;
 }
 
-// --- saved credential: environment variables, or (Windows) a DPAPI-encrypted file written by Export-Clixml
-function savedCredential() {
-  if (!!process.env.TRENITALIA_USERNAME !== !!process.env.TRENITALIA_PASSWORD) {
-    fail('credential', 'set both TRENITALIA_USERNAME and TRENITALIA_PASSWORD, or neither');
-  }
-  if (process.env.TRENITALIA_USERNAME && process.env.TRENITALIA_PASSWORD) {
-    return { username: process.env.TRENITALIA_USERNAME, password: process.env.TRENITALIA_PASSWORD };
-  }
-  const file = path.join(home, 'credential.xml');
-  if (process.platform !== 'win32' || !fs.existsSync(file)) return null;
-  let output;
-  try {
-    output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-      '$c = Import-Clixml -LiteralPath $env:TRENITALIA_CREDENTIAL_FILE; $c.UserName; $c.GetNetworkCredential().Password'],
-    { encoding: 'utf8', env: { ...process.env, TRENITALIA_CREDENTIAL_FILE: file }, stdio: ['ignore', 'pipe', 'pipe'] });
-  } catch (error) {
-    if (error.code === 'ENOENT') fail('dependency', 'powershell.exe is required to read the Windows credential file');
-    fail('credential', 'saved credential cannot be decrypted in this process context; run as the Windows user who saved it, save it for this context, or use login --manual');
-  }
-  const [username, password] = output.split(/\r?\n/);
-  if (!username || !password) fail('credential', 'saved credential is incomplete; run save-credential.ps1 locally');
-  return { username, password };
-}
-
 // --- mask known personal values in recordings and diagnostic samples
-function masker(config, credential) {
+function masker(config) {
   const personal = [config.traveller.firstName, config.traveller.lastName, config.account?.lastName, config.traveller.tuttoTrenoCardNumber,
-    ...Object.values(config.stations), credential?.username, credential?.password]
+    ...Object.values(config.stations)]
     .filter((value) => value && String(value).length > 2).map((value) => String(value).toLowerCase());
   const sensitiveKey = /pass(word)?|token|secret|cookie|user(name)?|e-?mail|phone|mobile|birth|fiscal|^(first|last)name$|surname|holder|cardnumber|loyaltycode|cartafreccia|tuttotreno|customerkey|pnr|booking.?reference/i;
   const mask = (value, key = '') => {
@@ -212,10 +186,7 @@ async function doctor() {
     nodeSupported: Number(process.versions.node.split('.')[0]) >= 22,
     configPresent: fs.existsSync(configFile),
     browserProfilePresent: fs.existsSync(profileDirectory),
-    credentialMode: !!process.env.TRENITALIA_USERNAME !== !!process.env.TRENITALIA_PASSWORD ? 'incomplete environment credential'
-      : process.env.TRENITALIA_USERNAME && process.env.TRENITALIA_PASSWORD ? 'environment'
-      : process.platform === 'win32' && fs.existsSync(path.join(home, 'credential.xml')) ? 'Windows credential file'
-        : 'manual browser sign-in',
+    signInMode: 'manual browser sign-in',
     browser: process.env.CHROME_PATH ? 'custom executable' : browserChannel,
   };
   if (checks.configPresent) {
@@ -223,11 +194,6 @@ async function doctor() {
   }
   if (!checks.nodeSupported) issues.push('Install Node.js 22 or newer');
   if (!checks.configPresent || checks.configValid === false) issues.push('Create or correct the private config.json');
-  if (checks.credentialMode === 'incomplete environment credential') issues.push('Set both credential environment variables, or neither');
-  if (checks.credentialMode === 'Windows credential file') {
-    try { savedCredential(); checks.credentialUsable = true; }
-    catch (error) { checks.credentialUsable = false; issues.push(error.message); }
-  }
   try {
     const chromium = await playwrightChromium();
     checks.playwrightInstalled = true;
@@ -257,7 +223,7 @@ async function openBrowser({ headless }) {
   try { context = await chromium.launchPersistentContext(profileDirectory, options); }
   catch (error) {
     if (!headless && /Missing X server|DISPLAY|X server/i.test(String(error.message))) {
-      fail('browser', 'A visible plugin browser needs a graphical session (DISPLAY or X server); use login --headless only for automatic sign-in, or run login --manual on your computer');
+      fail('browser', 'A visible plugin browser needs a graphical session (DISPLAY or X server); run login on your computer');
     }
     fail('browser', `The selected browser could not open the plugin profile: ${String(error.message).split('\n')[0]}. Run doctor; close another plugin browser using this profile, or select Chrome/Edge with TRENITALIA_BROWSER_CHANNEL`);
   }
@@ -326,34 +292,18 @@ async function session(page, api, config) {
     tripsReadable, tripStatus: probe?.status ?? null, tokenExpiresAt: token.expiresAt ? new Date(token.expiresAt).toISOString() : null };
 }
 
-async function signIn(page, api, config, credential) {
-  await page.goto(`${SITE}#/login`, { waitUntil: 'load' });
-  const usernameField = page.locator('#username:visible').first();
-  await usernameField.waitFor();
-  // --- a greyed-out form means some account is already signed in in this profile
-  if (!(await usernameField.isEditable())) return session(page, api, config);
-  await usernameField.fill(credential.username);
-  await page.locator('#password:visible').first().fill(credential.password);
-  const auth = await captureAuthResponse(page,
-    () => page.getByRole('button', { name: /^\s*(LOG IN|ACCEDI)\s*$/i }).first().click());
-  if (auth.error) return { ...await session(page, api, config), auth };
-  // --- the site signs in within about 5 s: check for at most 15 s after the auth response
-  for (let attempt = 0; attempt < 5; attempt++) {
-    await wait(3000);
-    const state = await session(page, api, config);
-    if (state.signedIn) return { ...state, auth };
-  }
-  return { ...await session(page, api, config), auth };
+async function manualSignIn(page, api, config) {
+  process.stderr.write('Sign in yourself in the visible plugin browser (at most 5 minutes)...\n');
+  return waitForManualSignIn(page, () => page.goto(`${SITE}#/login`, { waitUntil: 'load' }),
+    () => session(page, api, config));
 }
 
-async function ensureSession(page, api, config) {
+async function ensureSession(page, api, config, headless = false) {
   let state = await session(page, api, config);
   if (state.signedIn) return { ...state, how: 'existing session' };
   if (state.tokenUnexpired) return { ...state, how: 'existing session did not verify' };
-  const credential = savedCredential();
-  if (!credential) return { ...state, how: 'no saved credential' };
-  state = await signIn(page, api, config, credential);
-  return { ...state, how: state.signedIn ? 'saved credential' : 'saved credential did not verify' };
+  if (headless) return { ...state, how: 'manual sign-in required' };
+  return manualSignIn(page, api, config);
 }
 
 async function stationIds(api, config) {
@@ -449,10 +399,11 @@ async function status(config) {
   if (flag('days')) config.window.workingDays = positiveCount(flagValue('days'), '--days');
   const days = targetDays(config, fromDay);
   result.step = 'browser';
-  const { context, page, api } = await openBrowser({ headless: !flag('visible') });
+  const headless = !!flag('headless') && !flag('visible');
+  const { context, page, api } = await openBrowser({ headless });
   try {
     result.step = 'session';
-    result.session = await ensureSession(page, api, config);
+    result.session = await ensureSession(page, api, config, headless);
     result.window = { from: days[0], to: days[days.length - 1], workingDays: days.length };
     if (!result.session.signedIn) fail('session', authFailure(result.session), 2);
     result.plan = await accountPlan(api, config, days, fromDay, result.session.signedIn);
@@ -803,11 +754,12 @@ async function book(config) {
   }
   const confirm = !!flag('confirm');
   result.step = 'browser';
-  const { context, page, api } = await openBrowser({ headless: !!flag('headless') });
+  const headless = !!flag('headless');
+  const { context, page, api } = await openBrowser({ headless });
   result.booked = [];
   try {
     result.step = 'session';
-    result.session = await ensureSession(page, api, config);
+    result.session = await ensureSession(page, api, config, headless);
     if (!result.session.signedIn) fail('session', authFailure(result.session), 2);
     const today = isoDay(new Date());
     const startDay = on && on > today ? on : from && from > today ? from : today;
@@ -837,27 +789,11 @@ async function book(config) {
 
 async function login(config) {
   result.step = 'browser';
-  const manual = !!flag('manual');
-  const browser = loginBrowserOptions({ manual, headless: !!flag('headless') });
+  const browser = loginBrowserOptions({ headless: !!flag('headless') });
   const { context, page, api } = await openBrowser(browser);
   try {
     result.step = 'session';
-    let state = await session(page, api, config);
-    if (!state.signedIn) {
-      if (manual) {
-        await page.goto(`${SITE}#/login`, { waitUntil: 'load' });
-        process.stderr.write('Sign in in the plugin browser window (at most 5 minutes)...\n');
-        for (let attempt = 0; attempt < 100 && !state.signedIn; attempt++) {
-          await wait(3000);
-          state = await session(page, api, config).catch(() => state);
-          if (state.tokenUnexpired && state.accountMatchesHolder === false) break;
-        }
-      } else if (!state.tokenUnexpired) {
-        const credential = savedCredential();
-        if (credential) state = await signIn(page, api, config, credential);
-        else state = { ...state, how: 'no saved credential' };
-      }
-    }
+    const state = await ensureSession(page, api, config);
     result.session = state;
     if (!state.signedIn) fail('session', authFailure(state), 2);
     result.ok = true;
@@ -868,7 +804,7 @@ async function login(config) {
 
 async function record(config) {
   result.step = 'browser';
-  const mask = masker(config, null);
+  const mask = masker(config);
   const { context } = await openBrowser({ headless: false });
   fs.mkdirSync(path.join(home, 'recordings'), { recursive: true });
   const file = path.join(home, 'recordings', `${stamp()}.jsonl`);

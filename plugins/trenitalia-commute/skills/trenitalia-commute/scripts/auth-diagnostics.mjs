@@ -34,8 +34,8 @@ export function classifyAuthResponse({ status = null, contentType = null, body =
   return { status: safeStatus, contentType: safeType, error };
 }
 
-// Install both listeners before the click. The response body is inspected only in memory and never returned.
-export async function captureAuthResponse(page, click, timeoutMilliseconds = 15000) {
+// Install both listeners before opening the login page. The user submits the form; the body stays in memory.
+export async function captureAuthResponse(page, openLogin, timeoutMilliseconds = 15000) {
   let timer;
   let resolveEvent;
   let settled = false;
@@ -61,7 +61,7 @@ export async function captureAuthResponse(page, click, timeoutMilliseconds = 150
   page.on('requestfailed', onRequestFailed);
   timer = setTimeout(() => settle({ missing: true }), timeoutMilliseconds);
   try {
-    await click();
+    await openLogin();
     const observed = await event;
     if (observed.failed) return { status: null, contentType: null, error: 'network-failure' };
     if (observed.missing) return { status: null, contentType: null, error: 'auth-response-missing' };
@@ -77,13 +77,29 @@ export async function captureAuthResponse(page, click, timeoutMilliseconds = 150
   }
 }
 
-export function loginBrowserOptions({ manual = false, headless = false, platform = process.platform,
-  display = process.env.DISPLAY, waylandDisplay = process.env.WAYLAND_DISPLAY } = {}) {
-  if (manual && headless) throw new Error('login --manual needs a visible browser; remove --headless');
-  if (manual && platform === 'linux' && !display && !waylandDisplay) {
-    throw new Error('login --manual needs a graphical session (DISPLAY or WAYLAND_DISPLAY); run it on your computer');
+export async function waitForManualSignIn(page, openLogin, verifySession, timeoutMilliseconds = 5 * 60000, pollMilliseconds = 3000) {
+  const deadline = Date.now() + timeoutMilliseconds;
+  const auth = await captureAuthResponse(page, openLogin, timeoutMilliseconds);
+  let state = await verifySession();
+  if (state.signedIn) return { ...state, how: 'manual browser sign-in' };
+  if (auth.error && auth.error !== 'site-challenge') return { ...state, auth };
+  const verificationDeadline = auth.error === 'site-challenge' ? deadline : Math.min(deadline, Date.now() + 15000);
+  while (Date.now() < verificationDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollMilliseconds, verificationDeadline - Date.now())));
+    state = await verifySession().catch(() => state);
+    if (state.signedIn || (state.tokenUnexpired && state.accountMatchesHolder === false)) break;
   }
-  return { headless: !!headless };
+  return { ...state, auth: state.signedIn ? undefined : auth,
+    how: state.signedIn ? 'manual browser sign-in' : 'manual sign-in did not verify' };
+}
+
+export function loginBrowserOptions({ headless = false, platform = process.platform,
+  display = process.env.DISPLAY, waylandDisplay = process.env.WAYLAND_DISPLAY } = {}) {
+  if (headless) throw new Error('login requires a visible browser; remove --headless');
+  if (platform === 'linux' && !display && !waylandDisplay) {
+    throw new Error('login needs a graphical session (DISPLAY or WAYLAND_DISPLAY); run it on your computer');
+  }
+  return { headless: false };
 }
 
 // Describe why an account session cannot be trusted for booking, without repeating page text or secrets.
@@ -92,7 +108,7 @@ export function authFailure(state) {
   const status = state.auth?.status ?? 'unknown';
   if (error === 'site-access-blocked') return 'Le Frecce blocked sign-in from this environment (HTTP 403 Access Denied); credentials were not verified';
   if (error === 'credential-rejected') return `Le Frecce authentication API explicitly rejected the credentials (HTTP ${status})`;
-  if (error === 'site-challenge') return 'Le Frecce requires an additional sign-in challenge; use login --manual in the plugin browser on your computer';
+  if (error === 'site-challenge') return 'Le Frecce requires an additional sign-in challenge; use login in the plugin browser on your computer';
   if (error === 'network-failure') return 'Le Frecce sign-in request failed before an HTTP response; credentials were not verified';
   if (error === 'auth-response-missing') return 'No Le Frecce authentication response was observed; credentials were not verified';
   if (error === 'auth-http-error') return `Le Frecce sign-in failed (HTTP ${status}); credentials were not verified`;
@@ -102,7 +118,7 @@ export function authFailure(state) {
   if (state.tokenUnexpired && !state.tripsReadable) {
     return `signed in, but the trip list could not be read (HTTP ${state.tripStatus ?? 'unknown'})`;
   }
-  if (state.how === 'no saved credential') return 'no saved credential in this workstation; run login --manual or save one locally';
+  if (state.how === 'manual sign-in required') return 'No verified session in this browser profile; run login in a visible browser on your computer';
   if (state.pageMessage) return 'Le Frecce login page showed an error; the authentication API did not verify bad credentials';
-  return 'sign-in did not create a verified session; check the local browser window for a challenge or changed login flow';
+  return 'manual sign-in did not create a verified session; check the visible plugin browser for a challenge or changed login flow';
 }

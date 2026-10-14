@@ -54,9 +54,8 @@ codex plugin marketplace upgrade trenitalia-commute-local
 codex plugin add trenitalia-commute@trenitalia-commute-local
 ```
 
-Restart Claude or open a new Codex chat to load the updated skill. Version 1.0.5 identifies an HTTP 403 HTML
-Access Denied response from the actual login request, separates it from credential errors, and supports
-`login --headless` for automatic sign-in without a graphical desktop.
+Restart Claude or open a new Codex chat to load the updated skill. Version 1.0.6 requires the user to sign in
+in the visible plugin browser. `login`, `status` and `book` continue after the account session is verified.
 
 ## Before the first booking (on each workstation)
 
@@ -74,43 +73,38 @@ Access Denied response from the actual login request, separates it from credenti
    own terminal; it asks the same questions. Do not put personal values in this repository or copy a colleague's
    config without reviewing the traveller, route, fare and time windows.
 3. Run `node "<installed skill folder>\scripts\commute.mjs" doctor` (on macOS/Linux, use `/` path separators).
-   It checks Node, Playwright, browser launch and config without visiting Le Frecce or printing credentials.
+   It checks Node, Playwright, browser launch and config without visiting Le Frecce.
    Run it in the same execution context that will run bookings: a sandboxed agent can see a different Node version
-   or Windows credential identity from your own terminal. `doctor.runtimeReady` covers only the local program
+   or browser profile from your own terminal. `doctor.runtimeReady` covers only the local program
    setup; it does not test whether Le Frecce will accept authentication from that environment.
-   `doctor.credentialUsable` checks whether this process can decrypt a saved Windows credential.
    Set `TRENITALIA_BROWSER_CHANNEL=msedge` to use Edge, or `CHROME_PATH` to select a custom Chromium executable.
-4. Sign in **on this workstation**:
-   - Windows: run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<installed skill folder>\scripts\save-credential.ps1" -Folder "$env:USERPROFILE\.trenitalia-commute"`.
-     It stores a Windows-encrypted file. It can only be decrypted by the same Windows user on the same machine;
-     each colleague must save their own. Then run `node "<installed skill folder>\scripts\commute.mjs" login`.
-   - Windows, macOS or Linux: run `node "<installed skill folder>/scripts/commute.mjs" login --manual` and sign in
-     in the browser window the plugin opens. This skips the saved credential. The plugin uses a dedicated browser
-     profile, so being signed in in your everyday Chrome window does not sign in the plugin. The session persists
-     until Le Frecce expires it; sign in manually again when needed.
+4. Run `node "<installed skill folder>/scripts/commute.mjs" login` on your computer, then sign in yourself in the
+   visible browser window the plugin opens. The plugin does not read or submit your password. It uses a dedicated
+   browser profile, so being signed in in your everyday Chrome window does not sign in the plugin. The session
+   persists until Le Frecce expires it. A visible `status` or `book` run will prompt for manual sign-in again when
+   needed, then continue after checking the account and its trips.
 5. Run `status` before booking. If it reports a site access block, explicit credential rejection, challenge,
    network failure, account mismatch or unreadable trip list, stop and resolve that specific error. Do not retry
    a rejected or unverified password in a loop.
 
-On macOS/Linux, manual sign-in remains usable only while that browser session is valid. An unattended weekly run
-will stop if Le Frecce expires it. For unattended sign-in on those systems, supply both `TRENITALIA_USERNAME` and
-`TRENITALIA_PASSWORD` through a secure process environment; the plugin does not provide a macOS/Linux keychain
-integration. A workstation's browser policy can also prevent automation even when ordinary browsing works;
-`doctor` reports browser launch separately from website login.
+An unattended or `--headless` run can reuse a verified session in this profile. If it has expired, the run stops
+and asks for a visible local login; it never submits a saved or environment password. A workstation's browser
+policy can also prevent automation even when ordinary browsing works; `doctor` reports browser launch separately
+from website login. An older `credential.xml` remains in your private folder if you created one; version 1.0.6
+does not read it. You can delete that file yourself when you no longer need it.
 
 A cloud network may receive an HTML Access Denied response from the site's edge on the login request even when
 public train search and free-fare selection work. This does not verify or disprove the credentials. Run the plugin
-on your own computer and network, then use `login --manual` in its visible, dedicated browser profile. The usual
-browser, the plugin profile and a cloud environment have separate sessions. On a Linux host without `DISPLAY` or
-`WAYLAND_DISPLAY`, `login --manual` cannot open; `login --headless` supports automatic sign-in but cannot remove
-a site access block. Do not use proxy or IP changes, CAPTCHA workarounds or copied browser cookies to bypass it.
+on your own computer and network, then use `login` in its visible, dedicated browser profile. The usual browser,
+the plugin profile and a cloud environment have separate sessions. On a Linux host without `DISPLAY` or
+`WAYLAND_DISPLAY`, a visible login cannot open. Do not use proxy or IP changes, CAPTCHA workarounds or copied
+browser cookies to bypass a site block.
 
-Personal data, the credential, the browser profile and the run logs live only in `~/.trenitalia-commute/`,
+Personal config, the browser profile and the run logs live only in `~/.trenitalia-commute/`,
 never in this folder.
 
 The browser and Node requirements follow [Playwright's supported platforms](https://playwright.dev/docs/intro)
-and [browser channels](https://playwright.dev/docs/browsers). Windows credential files use
-[DPAPI and cannot be moved to another account or computer](https://learn.microsoft.com/powershell/module/microsoft.powershell.utility/export-clixml).
+and [browser channels](https://playwright.dev/docs/browsers).
 
 Installation commands follow the [Claude plugin guide](https://code.claude.com/docs/en/plugins) and the
 [Codex plugin guide](https://developers.openai.com/plugins/build/plugins).

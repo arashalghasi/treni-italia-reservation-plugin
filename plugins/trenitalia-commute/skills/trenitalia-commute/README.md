@@ -15,11 +15,10 @@ received contains nothing personal, so you can pass it on as it is.
 | `config.example.json` | template of the personal config |
 | `scripts/commute.mjs` | helper script: `doctor`, `status` (read-only plan), `login`, `book`, `record` |
 | `scripts/package.json` | pins `playwright-core` (drives installed Chrome or Edge; no browser download) |
-| `scripts/save-credential.ps1` | saves the lefrecce.it username and password encrypted (Windows DPAPI only) for automatic sign-in |
-| `scripts/setup.ps1` | first-run questionnaire for personal config and encrypted sign-in credential |
+| `scripts/setup.ps1` | first-run questionnaire for the private commute config |
 
 Personal state, all in `~/.trenitalia-commute/` (Windows: `%USERPROFILE%\.trenitalia-commute\`):
-`config.json`, `credential.xml` (optional), `browser-profile/` (the script's own signed-in Chrome profile),
+`config.json`, `browser-profile/` (the script's own signed-in Chrome profile),
 `runs/` (one JSON per `status` run, booking log), `recordings/`.
 
 ## Setup (once)
@@ -35,21 +34,18 @@ Personal state, all in `~/.trenitalia-commute/` (Windows: `%USERPROFILE%\.trenit
 3. Ask the skill to set up your commute. It asks for the traveller, account holder surname if different, card,
    stations, both train services and time
    windows, exact free fare names and IDs, travel days, and seat preferences, then writes the private config. For
-   the Le Frecce sign-in, it directs you to a local hidden credential prompt. Alternatively, run the complete
-   questionnaire in your own PowerShell terminal; it asks all of these questions and the hidden sign-in prompt.
-   Config and the Windows-encrypted credential are saved under `%USERPROFILE%\.trenitalia-commute`, outside the
-   plugin and Git repository.
+   Sign in yourself later in the visible plugin browser. Alternatively, run the complete questionnaire in your
+   own PowerShell terminal. The config is saved under `%USERPROFILE%\.trenitalia-commute`, outside the plugin and
+   Git repository; the questionnaire does not ask for a password.
 
    ```powershell
    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<skill folder>\scripts\setup.ps1"
    ```
 
-   If you already have a config and only need to replace the saved sign-in, run `save-credential.ps1` instead.
    To replace an existing config intentionally, pass `-Force` to `setup.ps1`.
 
-4. Run `doctor` to check the local runtime, then verify sign-in. A browser window opens on the script's own
-   profile; the session is kept for later runs. Each Windows user on each computer must save their own credential.
-   A credential XML file copied from another computer cannot be decrypted.
+4. Run `doctor` to check the local runtime, then run `login` and sign in yourself in the visible plugin browser.
+   The browser uses its own profile and keeps the session for later runs.
    `doctor.runtimeReady` does not test whether Le Frecce accepts authentication from this network.
 
    ```powershell
@@ -57,11 +53,10 @@ Personal state, all in `~/.trenitalia-commute/` (Windows: `%USERPROFILE%\.trenit
    node <skill folder>\scripts\commute.mjs login
    ```
 
-   On macOS/Linux, ask the skill to write the private config, then run `login --manual` and sign in in the plugin
-   browser window. On any OS this also works when automatic sign-in is rejected. `--manual` does not submit the
-   saved credential. The ordinary Chrome profile and plugin profile are separate. For unattended runs outside
-   Windows, `TRENITALIA_USERNAME` and `TRENITALIA_PASSWORD` can be supplied securely in the run environment;
-   never put them in the config, command line or logs.
+   On macOS/Linux, ask the skill to write the private config, then run `login` locally with a graphical session.
+   The ordinary Chrome profile and plugin profile are separate. `status` and `book` also open the visible plugin
+   browser when sign-in is needed, then continue after verifying the account and reading its trips.
+   An older `credential.xml` is ignored by this version; remove it locally if you no longer need it.
 
 ## Commands
 
@@ -70,16 +65,14 @@ node commute.mjs doctor                 # check workstation setup; visits no web
 node commute.mjs status                 # next 20 working days
 node commute.mjs status --days=5        # shorter window
 node commute.mjs status --from=YYYY-MM-DD
-node commute.mjs status --visible       # with a Chrome window, to watch
+node commute.mjs status --headless      # reuse an existing verified session only
 node commute.mjs book --confirm         # book every day the account still misses (both legs), €0,00 only
 node commute.mjs book --count=2 --confirm   # only the next two such days
 node commute.mjs book --from=2030-06-01 --until=2030-06-10 --confirm  # only missing days in this range
 node commute.mjs book --until=2030-06-30 --confirm  # never book after this date
 node commute.mjs book --on=2030-06-12 --leg=outbound --count=1 --confirm  # one specified missing leg
 node commute.mjs book --count=1         # dry run: stops on the payment page, books nothing
-node commute.mjs login                  # sign in from the local saved credential
-node commute.mjs login --headless       # automatic sign-in without a graphical desktop
-node commute.mjs login --manual         # skip saved credential; wait for local browser sign-in
+node commute.mjs login                  # wait for you to sign in in the visible plugin browser
 node commute.mjs record                 # record the site's API calls while you book one day by hand
 ```
 
@@ -93,12 +86,12 @@ or the passenger fields do not hold the configured values. It searches the reque
 each candidate day's account state immediately before booking. A `--from`/`--until` range may span at most 366
 calendar days.
 
-`login` records only the authentication request's HTTP status, MIME type and error category. An HTTP 403 HTML
+The script records only the authentication request's HTTP status, MIME type and error category. An HTTP 403 HTML
 Access Denied response is reported as `site-access-blocked`, even if the login page says “Incorrect username or
 password”; the credentials were not verified. An explicit structured API error is required before the plugin calls
 them rejected. A cloud network can be blocked while public search works. Run on your own computer/network and use
-`login --manual` in the plugin's visible, dedicated profile. Manual login needs `DISPLAY` or `WAYLAND_DISPLAY` on
-Linux; automatic `login --headless` needs no graphical session but does not bypass a site block. Do not rotate IPs,
+`login` in the plugin's visible, dedicated profile. Manual login needs `DISPLAY` or `WAYLAND_DISPLAY` on Linux;
+`--headless` runs reuse a valid session or stop. Do not rotate IPs,
 use proxies, bypass CAPTCHA, or copy cookies to get around a block.
 
 ```
@@ -138,7 +131,7 @@ The initial local validation covered these flows:
 | train search (`ticket/solutions`), working days and holidays | verified against the site |
 | trip list (`travel/solutions`) | verified against the "My trips" page |
 | signed-in check | verified: token + surname in header + trip call (signed out the trip call answers 200 with an empty list) |
-| automatic sign-in from `credential.xml` | verified from signed out to signed in, headless |
+| manual sign-in in the plugin browser | verified session, readable account trips, no password handled by the script |
 | `book`, dry run | verified that the cart held both free offers at the payment page |
 | `book --confirm` | verified against PNRs in the trip list; the script waits for delayed trip entries, switches a first-class return panel to second class, and retries a conditions box while extras load |
 | no duplicates | verified against distinct day and leg slots in the account |

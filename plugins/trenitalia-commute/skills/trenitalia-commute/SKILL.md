@@ -23,8 +23,8 @@ config file (§1). This file holds no personal data; never write any into it.
 - **Never re-book a leg that already has a PNR.** Read the account state first (§2).
 - **Never substitute the service.** If the configured `service` (for example `IC`, `FB`) has no train in the leg's
   time window, report that day; never take a Regionale or another train instead.
-- **The password is never yours to handle.** Never type, read, ask for, store or repeat it. Signing in is done by
-  the script from the credential the user saved in the OS (README), or by the user in the browser.
+- **The password is never yours to handle.** Never type, read, ask for, store or repeat it. The user signs in
+  themselves in the visible plugin browser; the script never submits credentials.
 - **Accepting the conditions of carriage is a legal act.** The user's request to book is the authorisation for
   the days the account shows as `to-book` (§2.1b); never accept them for anything else (a priced fare, another
   train, a day outside the request).
@@ -55,11 +55,9 @@ of guessing train type, time, fare, or route. Do not roast or insult the user. C
 the user's request. On Windows, `scripts/setup.ps1` is an alternative interactive questionnaire that asks the same
 questions and writes the file.
 
-On Windows, ask the user to run `scripts/save-credential.ps1` in their own local PowerShell terminal for the Le
-Frecce username and hidden password prompt. The encrypted file belongs to that Windows user on that workstation;
-each colleague must create their own. On macOS and Linux, use `login --manual` in the plugin's dedicated browser
-profile. An environment credential is optional only when the user already provides it securely for unattended runs.
-Never request the password in chat or put it in the config. Run `doctor`, then verify with `login` and `status`.
+Never request the password in chat or put it in the config. Run `doctor`, then `login` on the user's computer.
+The user signs in in the visible plugin browser. Verify with `status` before booking. When a visible `status` or
+`book` run finds no verified session, it opens that same browser profile for manual sign-in and then continues.
 If sign-in fails, report `error` and the safe `session.auth` fields (status, content type, error category). Never
 repeat the credential or a raw response body, and do not retry credentials in a loop.
 
@@ -91,11 +89,10 @@ node <skill folder>/scripts/commute.mjs status
 
 Needs Node 22+, Google Chrome or Microsoft Edge and a one-time `npm ci` in each installed plugin's `scripts/`
 folder (README). Run `node <skill folder>/scripts/commute.mjs doctor` first on a new workstation; it reports
-runtime, dependency, browser and config readiness without opening Le Frecce or printing credentials.
+runtime, dependency, browser and config readiness without opening Le Frecce.
 `doctor.runtimeReady` says nothing about whether Le Frecce will accept login from the network. Run it in
-the same agent execution context as booking; a sandbox may have a different Node or Windows credential identity
-than the user's terminal. Then `status`
-signs in if needed, reads the account's trips through the site's own API (no scrolling), finds the matching train for
+the same agent execution context as booking; a sandbox may have a different browser profile than the user's terminal.
+Then `status` waits for the user to sign in if needed, reads the account's trips through the site's own API (no scrolling), finds the matching train for
 every workday and leg, and prints one JSON line (the readable table goes to stderr). It books nothing.
 
 Per row: `day`, `leg`, `state`, plus `train`/`departure` or `pnr`.
@@ -114,17 +111,16 @@ Per row: `day`, `leg`, `state`, plus `train`/`departure` or `pnr`.
 Exit code `2` = the account session was not verified. Read `error` and `session.auth`: they distinguish an edge
 access block, explicit credential rejection, challenge, network failure, account mismatch and trip-list failure.
 The website's generic login-page message alone does not prove that a password is wrong. `login` uses the plugin's
-own Chrome/Edge profile; the user's usual browser profile is separate. Automatic `login --headless` works without
-a graphical desktop, but cannot fix an HTTP 403 Access Denied response. Manual `login --manual` opens a visible
-plugin browser, skips the saved credential and waits up to five minutes; on Linux it needs a graphical session.
+own Chrome/Edge profile; the user's usual browser profile is separate. `login` opens a visible plugin browser
+and waits up to five minutes for the user to sign in; on Linux it needs a graphical session. A `--headless`
+`status` or `book` run reuses a verified session or stops with exit code 2 if sign-in is needed.
 Use it on the user's computer/network, then run `status` to verify the account. Public train search working in a
 cloud environment does not establish that sign-in is allowed there. Do not suggest proxy or IP rotation, CAPTCHA
 bypass, or copying browser cookies.
 
-- `login` finds no saved credential: ask the user once to run `scripts/save-credential.ps1` (they type username
-  and password into its hidden local prompt; Windows encrypts the file for their user only), then run `login` again.
+- No verified session: have the user sign in in the visible plugin browser. Never automate the login form.
 - HTTP 403 `site-access-blocked`, explicit credential rejection, CAPTCHA, OTP or another challenge: stop and
-  report the classified result. Do not retry in a loop; the user can run `login --manual` on their computer.
+  report the classified result. Do not retry in a loop; the user can run `login` on their computer.
 
 Exit code `1`: read `step` and `error`. A failed trip-list page stops the run; an empty partial list is not proof
 that a leg is unbooked. If `trips.sample` is set, a trip record arrived but could not be parsed:

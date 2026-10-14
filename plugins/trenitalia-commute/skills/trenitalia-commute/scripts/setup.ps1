@@ -1,15 +1,12 @@
 # First-run setup. All answers stay in the user's private ~/.trenitalia-commute folder.
-# Run this in a local PowerShell terminal so the password is entered only into a hidden prompt.
+# Sign-in happens later in the visible plugin browser; this script never asks for a password.
 param(
   [string]$Folder,
   [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
-if (-not [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
-  throw 'This setup script uses Windows credential encryption. Ask the skill to create config.json and use login --manual on macOS or Linux.'
-}
-if (-not $Folder) { $Folder = Join-Path $env:USERPROFILE '.trenitalia-commute' }
+if (-not $Folder) { $Folder = Join-Path $HOME '.trenitalia-commute' }
 $configFile = Join-Path $Folder 'config.json'
 if ((Test-Path -LiteralPath $configFile) -and -not $Force) {
   throw "Config already exists at $configFile. Use -Force only when you intend to replace it."
@@ -100,7 +97,6 @@ $config = [ordered]@{
 if ($accountLastName) { $config['account'] = [ordered]@{ lastName = $accountLastName } }
 
 New-Item -ItemType Directory -Force -Path $Folder | Out-Null
-& (Join-Path $PSScriptRoot 'save-credential.ps1') -Folder $Folder
 $json = $config | ConvertTo-Json -Depth 20
 [System.IO.File]::WriteAllText($configFile, $json + "`n", (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "Config saved at $configFile. Run 'node commute.mjs login' to verify the account."
